@@ -954,7 +954,7 @@
 
     try {
       // 1. ЗАПРОС К API: Приёмка данных участка и экономики
-      const plotResponse = await fetch(`http://127.0.0.1:8000/api/plots/${parcelId}`);
+      const plotResponse = await fetch(`http://78.154.103.9:16998/api/plots/${parcelId}`);
       
       if (!plotResponse.ok) {
         throw new Error('Участок не найден в базе данных (404)');
@@ -965,7 +965,7 @@
       // 2. ЗАПРОС К API: Приёмка NDVI
       const startDate = '2022-01-01';
       const endDate = '2026-12-31';
-      const ndviResponse = await fetch(`http://127.0.0.1:8000/api/plots/${parcelId}/ndvi?start_date=${startDate}&end_date=${endDate}`);
+      const ndviResponse = await fetch(`http://78.154.103.9:16998/api/plots/${parcelId}/ndvi?start_date=${startDate}&end_date=${endDate}`);
       
       let ndviData = [];
       if (ndviResponse.ok) {
