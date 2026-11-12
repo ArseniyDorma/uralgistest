@@ -1,0 +1,1044 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>УралГИС-Агро — Анализ участка</title>
+
+  <!-- Leaflet CSS (локально с CDN fallback) -->
+  <link rel="stylesheet" href="leaflet/leaflet.css" onerror="this.onerror=null;this.href='http://localhost/leaflet/leaflet.css';" />
+
+  <!-- Leaflet.draw CSS (локально с CDN fallback) -->
+  <link rel="stylesheet" href="leaflet/draw/leaflet.draw.css" onerror="this.onerror=null;this.href='http://localhost/leaflet/draw/leaflet.draw.css';" />
+
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Georgia, "Times New Roman", serif;
+      background: #9ae0a4;
+      color: #1f2937;
+    }
+    header {
+      background: #32a45a;
+      color: #fff;
+      padding: 14px 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    header h1 { font-size: 18px; margin: 0; font-weight: 600; }
+    .status {
+      font-size: 13px;
+      padding: 4px 10px;
+      background: #374151;
+      color: #fff;
+    }
+    .status.ready { background: #16a34a; }
+    .status.error { background: #dc2626; }
+    .status.loading { background: #d97706; }
+
+    main {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 16px;
+    }
+
+    .map-card {
+      background: #ffffff;
+      padding: 16px;
+      border: 1px solid #d1d5db;
+      margin-bottom: 16px;
+    }
+    .map-card h2 {
+      margin-top: 0;
+      margin-bottom: 12px;
+      font-size: 15px;
+      color: #1f2937;
+      text-align: center;
+    }
+
+    .map-wrapper {
+      position: relative;
+      width: 100%;
+      height: 520px;
+      border: 1px solid #d1d5db;
+      background: #e5e7eb;
+    }
+    #map {
+      width: 100%;
+      height: 100%;
+    }
+
+    /* === ВЫПАДАЮЩАЯ ВКЛАДКА ИНСТРУМЕНТОВ === */
+    .map-tools {
+      position: absolute;
+      top: 14px;
+      left: 14px;
+      z-index: 1000;
+      width: 230px;
+      display: flex;
+      flex-direction: column;
+    }
+    .tools-toggle {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 8px 12px;
+      background: #ffffff;
+      color: #1e293b;
+      border: 1px solid #cbd5e1;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 13px;
+      font-weight: 700;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+      width: 100%;
+    }
+    .tools-toggle:hover {
+      background: #f1f5f9;
+    }
+    .tools-toggle .arrow {
+      font-size: 11px;
+      transition: transform 0.15s ease;
+    }
+    .tools-toggle.open .arrow {
+      transform: rotate(180deg);
+    }
+
+    .tools-panel {
+      display: none;
+      flex-direction: column;
+      gap: 6px;
+      background: #ffffff;
+      border: 1px solid #cbd5e1;
+      border-top: none;
+      padding: 10px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+    }
+    .tools-panel.open {
+      display: flex;
+    }
+
+    .menu-btn {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 10px;
+      background: #ffffff;
+      color: #334155;
+      border: 1px solid #cbd5e1;
+      cursor: pointer;
+      text-align: left;
+      font-family: inherit;
+      font-size: 13px;
+      transition: all 0.15s ease;
+      width: 100%;
+    }
+    .menu-btn:hover {
+      background: #f1f5f9;
+      border-color: #94a3b8;
+    }
+    .menu-btn.active {
+      background: #16a34a;
+      border-color: #15803d;
+      color: #ffffff;
+      font-weight: 600;
+    }
+    .menu-btn.active small {
+      color: #dcfce7;
+    }
+    .menu-btn-icon {
+      font-size: 15px;
+      line-height: 1;
+      flex-shrink: 0;
+      font-family: "Segoe UI Symbol", "Symbola", "DejaVu Sans", monospace;
+      width: 18px;
+      text-align: center;
+    }
+    .menu-btn-content {
+      display: flex;
+      flex-direction: column;
+      line-height: 1.2;
+    }
+    .menu-btn-content small {
+      font-size: 10px;
+      color: #64748b;
+      margin-top: 2px;
+    }
+    .menu-divider {
+      height: 1px;
+      background: #e2e8f0;
+      margin: 3px 0;
+    }
+    .menu-btn.secondary {
+      background: #f8fafc;
+      border-color: #cbd5e1;
+      color: #334155;
+    }
+    .menu-btn.finish-btn {
+      background: #2563eb;
+      border-color: #1d4ed8;
+      color: #ffffff;
+      font-weight: 600;
+    }
+    .menu-btn.finish-btn:hover {
+      background: #1d4ed8;
+    }
+    .menu-btn.danger {
+      background: #fef2f2;
+      border-color: #fca5a5;
+      color: #991b1b;
+    }
+    .menu-btn.danger:hover {
+      background: #fee2e2;
+    }
+    .menu-hint-box {
+      font-size: 11px;
+      color: #334155;
+      background: #f1f5f9;
+      padding: 7px 9px;
+      line-height: 1.35;
+      margin-top: 2px;
+      border-left: 3px solid #16a34a;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+    .card {
+      background: #ffffff;
+      padding: 16px;
+      border: 1px solid #d1d5db;
+    }
+    .card h2 {
+      margin-top: 0;
+      font-size: 15px;
+      color: #1f2937;
+    }
+    .row { margin-bottom: 10px; }
+    .label { font-size: 12px; color: #6b7280; }
+    .value { font-size: 16px; font-weight: 600; }
+
+    button {
+      background: #32a45a;
+      color: #fff;
+      border: none;
+      padding: 8px 14px;
+      cursor: pointer;
+      font-size: 14px;
+      font-family: inherit;
+    }
+    button:hover { background: #2a8c4c; }
+    button.secondary {
+      background: #e5e7eb;
+      color: #1f2937;
+    }
+	
+	.chart-container {
+      width: 100%;
+      height: 300px; /* Задаем высоту, чтобы график не растягивался */
+      position: relative;
+    }
+
+    #ndvi-chart {
+      width: 100% !important;
+      height: 100% !important;
+    }
+
+    .error-box {
+      display: none;
+      background: #fee2e2;
+      color: #991b1b;
+      padding: 10px;
+      margin-top: 10px;
+      font-size: 13px;
+      border: 1px solid #fca5a5;
+    }
+    .loader {
+      display: none;
+      border: 3px solid #e5e7eb;
+      border-top: 3px solid #32a45a;
+      border-radius: 50%;
+      width: 20px;
+      height: 20px;
+      animation: spin 1s linear infinite;
+      margin-right: 8px;
+      vertical-align: middle;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .full-width { grid-column: span 2; }
+
+    /* Скрыть атрибуцию Leaflet */
+    .leaflet-control-attribution {
+      display: none !important;
+    }
+  </style>
+  
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+
+<header>
+  <h1>УралГИС-Агро — Анализ участка</h1>
+  <div id="status" class="status">Просмотр карты</div>
+</header>
+
+<main>
+
+  <section class="map-card">
+    <h2>Карта участка</h2>
+
+    <div class="map-wrapper">
+
+      <!-- Выпадающая вкладка инструментов -->
+      <div class="map-tools" id="map-tools">
+        <button type="button" class="tools-toggle" id="tools-toggle" onclick="toggleTools()">
+          <span>⚙ Инструменты</span>
+          <span class="arrow">▼</span>
+        </button>
+
+        <div class="tools-panel" id="tools-panel">
+          <button type="button" class="menu-btn active" id="btn-tool-view" onclick="selectTool('view')">
+            <span class="menu-btn-icon">✥</span>
+            <span class="menu-btn-content">
+              <span>Просмотр карты</span>
+              <small>Перемещение и зум</small>
+            </span>
+          </button>
+
+          <button type="button" class="menu-btn" id="btn-tool-rect" onclick="selectTool('rect')">
+            <span class="menu-btn-icon">▭</span>
+            <span class="menu-btn-content">
+              <span>Выделение рамкой</span>
+              <small>Зажмите и тяните мышь</small>
+            </span>
+          </button>
+
+          <button type="button" class="menu-btn" id="btn-tool-poly" onclick="selectTool('poly')">
+            <span class="menu-btn-icon">✎</span>
+            <span class="menu-btn-content">
+              <span>Контур (полигон)</span>
+              <small>Кликайте по точкам</small>
+            </span>
+          </button>
+
+          <button type="button" class="menu-btn finish-btn" id="btn-finish-poly" onclick="finishPolygon()" style="display: none;">
+            <span class="menu-btn-icon">✓</span>
+            <span class="menu-btn-content">
+              <span>Завершить контур</span>
+              <small>Замкнуть границы</small>
+            </span>
+          </button>
+
+          <button type="button" class="menu-btn" id="btn-tool-edit" onclick="toggleEdit()">
+            <span class="menu-btn-icon">⚒</span>
+            <span class="menu-btn-content">
+              <span id="btn-edit-title">Редактировать</span>
+              <small id="btn-edit-desc">Тяните за вершины</small>
+            </span>
+          </button>
+
+          <div class="menu-divider"></div>
+
+          <button type="button" class="menu-btn secondary" onclick="loadDemoField()">
+            <span class="menu-btn-icon">◉</span>
+            <span class="menu-btn-content">
+              <span>Пример участка</span>
+              <small>Тестовый участок</small>
+            </span>
+          </button>
+
+          <button type="button" class="menu-btn danger" onclick="clearBoundaries()">
+            <span class="menu-btn-icon">✕</span>
+            <span class="menu-btn-content">
+              <span>Очистить границы</span>
+            </span>
+          </button>
+
+          <div class="menu-hint-box" id="menu-hint">
+            Режим просмотра: перемещайте карту или выберите инструмент.
+          </div>
+        </div>
+      </div>
+
+      <div id="map"></div>
+    </div>
+  </section>
+
+  <div class="grid">
+
+    <section class="card">
+      <h2>Выбор участка</h2>
+      <div class="row">
+        <div class="label">ID участка</div>
+        <div class="value" id="parcel-id">—</div>
+      </div>
+      <div class="row">
+        <div class="label">Координаты центра</div>
+        <div class="value" id="parcel-coords">—</div>
+      </div>
+      <div class="row">
+        <div class="label">Площадь (га)</div>
+        <div class="value" id="parcel-area">—</div>
+      </div>
+      <div class="row">
+        <div class="label">Периметр</div>
+        <div class="value" id="parcel-perimeter">—</div>
+      </div>
+      <div class="row">
+        <div class="label">Количество вершин</div>
+        <div class="value" id="parcel-points">—</div>
+      </div>
+      <div class="row" style="margin-top: 14px;">
+        <button onclick="runAnalysis()">Анализировать</button>
+      </div>
+      <div id="error" class="error-box"></div>
+      <div id="loader" class="loader"></div>
+    </section>
+
+    <section class="card">
+      <h2>Карточка участка</h2>
+      <div class="row">
+        <div class="label">Класс участка</div>
+        <div class="value" id="class">—</div>
+      </div>
+      <div class="row">
+        <div class="label">Качество данных</div>
+        <div class="value" id="quality">—</div>
+      </div>
+    </section>
+
+    <section class="card full-width">
+		<h2>График NDVI</h2>
+		<div class="chart-container">
+			<canvas id="ndvi-chart"></canvas>
+		</div>
+	</section>
+
+    <section class="card full-width">
+      <h2>Экономические показатели</h2>
+      <div class="row">
+        <div class="label">Базовая ставка</div>
+        <div class="value" id="base-rate">—</div>
+      </div>
+      <div class="row">
+        <div class="label">Рекомендуемая ставка</div>
+        <div class="value" id="recommended-rate">—</div>
+      </div>
+      <div class="row">
+        <div class="label">Период расчёта</div>
+        <div class="value" id="period">—</div>
+      </div>
+    </section>
+
+  </div>
+
+</main>
+
+<!-- Leaflet JS (локально с CDN fallback) -->
+<script src="leaflet/leaflet.js"></script>
+<script>
+  if (typeof L === 'undefined') {
+    document.write('<script src="http://localhost/leaflet/leaflet.js"><\/script>');
+  }
+</script>
+
+<!-- Leaflet.draw JS (локально с CDN fallback) -->
+<script src="leaflet/draw/leaflet.draw.js"></script>
+<script>
+  if (typeof L !== 'undefined' && typeof L.Control.Draw === 'undefined') {
+    document.write('<script src="http://localhost/leaflet/draw/leaflet.draw.js"><\/script>');
+  }
+</script>
+
+<script>
+  let map;
+  let drawnItems;
+  let currentLayer = null;
+  let currentTool = 'view';
+  let activeDrawHandler = null;
+  let editHandler = null;
+
+  let isBoxSelecting = false;
+  let boxStartLatLng = null;
+  let boxPreviewLayer = null;
+
+  const parcelShapeOptions = {
+    color: '#16a34a',
+    weight: 3,
+    opacity: 0.9,
+    fillColor: '#22c55e',
+    fillOpacity: 0.35
+  };
+
+  const previewShapeOptions = {
+    color: '#0284c7',
+    weight: 2,
+    opacity: 0.95,
+    dashArray: '6, 6',
+    fillColor: '#38bdf8',
+    fillOpacity: 0.25
+  };
+
+  function setStatus(text, cls) {
+    const el = document.getElementById('status');
+    el.textContent = text;
+    el.className = 'status ' + (cls || '');
+  }
+
+  function setMenuHint(text) {
+    const el = document.getElementById('menu-hint');
+    if (el) el.textContent = text;
+  }
+
+  function showError(msg) {
+    const el = document.getElementById('error');
+    el.textContent = msg;
+    el.style.display = 'block';
+  }
+
+  function hideError() {
+    document.getElementById('error').style.display = 'none';
+  }
+
+  // Выпадающая вкладка
+  function toggleTools() {
+    const toggle = document.getElementById('tools-toggle');
+    const panel = document.getElementById('tools-panel');
+    toggle.classList.toggle('open');
+    panel.classList.toggle('open');
+  }
+
+  function computeAreaHa(latlngs) {
+    const R = 6371000;
+    let area = 0;
+    const n = latlngs.length;
+    if (n < 3) return 0;
+
+    for (let i = 0; i < n; i++) {
+      const p1 = latlngs[i];
+      const p2 = latlngs[(i + 1) % n];
+      area += (p2[1] - p1[1]) * Math.PI / 180 *
+              (2 + Math.sin(p1[0] * Math.PI / 180) + Math.sin(p2[0] * Math.PI / 180));
+    }
+    area = Math.abs(area * R * R / 2);
+    return area / 10000;
+  }
+
+  function computePerimeterKm(latlngs) {
+    if (!latlngs || latlngs.length < 2) return 0;
+    const R = 6371;
+    let total = 0;
+    const n = latlngs.length;
+    for (let i = 0; i < n; i++) {
+      const p1 = latlngs[i];
+      const p2 = latlngs[(i + 1) % n];
+      const dLat = (p2.lat - p1.lat) * Math.PI / 180;
+      const dLng = (p2.lng - p1.lng) * Math.PI / 180;
+      const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                Math.cos(p1.lat * Math.PI / 180) * Math.cos(p2.lat * Math.PI / 180) *
+                Math.sin(dLng / 2) * Math.sin(dLng / 2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+      total += R * c;
+    }
+    return total;
+  }
+
+  function getLayerLatLngs(layer) {
+    if (!layer) return [];
+    if (layer instanceof L.Polygon || layer instanceof L.Rectangle) {
+      const raw = layer.getLatLngs();
+      return Array.isArray(raw[0]) ? raw[0] : raw;
+    }
+    return [];
+  }
+
+  function updateParcelInfo(layer) {
+    if (!layer) return;
+    const latlngs = getLayerLatLngs(layer);
+    if (!latlngs || latlngs.length === 0) return;
+
+    const center = layer.getBounds().getCenter();
+    const lat = center.lat;
+    const lng = center.lng;
+
+    const coordsArray = latlngs.map(p => [p.lat, p.lng]);
+    const areaHa = computeAreaHa(coordsArray);
+    const perimeterKm = computePerimeterKm(latlngs);
+
+    const id = `P-${lat.toFixed(4)}_${lng.toFixed(4)}`;
+    document.getElementById('parcel-id').textContent = id;
+    document.getElementById('parcel-coords').textContent = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+    document.getElementById('parcel-area').textContent = `${areaHa.toFixed(2)} га (${Math.round(areaHa * 10000).toLocaleString('ru-RU')} м²)`;
+    document.getElementById('parcel-perimeter').textContent = perimeterKm < 1 ?
+      `${Math.round(perimeterKm * 1000)} м` :
+      `${perimeterKm.toFixed(2)} км`;
+    document.getElementById('parcel-points').textContent = `${latlngs.length} вершин`;
+
+    hideError();
+  }
+
+  function resetParcelInfo() {
+    document.getElementById('parcel-id').textContent = '—';
+    document.getElementById('parcel-coords').textContent = '—';
+    document.getElementById('parcel-area').textContent = '—';
+    document.getElementById('parcel-perimeter').textContent = '—';
+    document.getElementById('parcel-points').textContent = '—';
+  }
+
+  // Выбор инструмента
+  function selectTool(tool) {
+    if (editHandler) {
+      stopEdit();
+    }
+
+    if (activeDrawHandler) {
+      activeDrawHandler.disable();
+      activeDrawHandler = null;
+    }
+    document.getElementById('btn-finish-poly').style.display = 'none';
+
+    currentTool = tool;
+
+    const btnView = document.getElementById('btn-tool-view');
+    const btnRect = document.getElementById('btn-tool-rect');
+    const btnPoly = document.getElementById('btn-tool-poly');
+    const btnEdit = document.getElementById('btn-tool-edit');
+
+    if (btnView) btnView.classList.remove('active');
+    if (btnRect) btnRect.classList.remove('active');
+    if (btnPoly) btnPoly.classList.remove('active');
+    if (btnEdit) btnEdit.classList.remove('active');
+
+    if (tool === 'view') {
+      if (btnView) btnView.classList.add('active');
+      map.dragging.enable();
+      setMenuHint('Режим просмотра: перемещайте карту или выберите инструмент для создания границ.');
+      setStatus('Просмотр карты', '');
+    } else if (tool === 'rect') {
+      if (btnRect) btnRect.classList.add('active');
+      setMenuHint('Зажмите левую кнопку мыши и растяните рамку по границам участка.');
+      setStatus('Выделение рамкой', 'loading');
+    } else if (tool === 'poly') {
+      if (btnPoly) btnPoly.classList.add('active');
+      document.getElementById('btn-finish-poly').style.display = 'flex';
+      setMenuHint('Кликайте по карте для добавления точек контура. Нажмите «Завершить контур» для замыкания.');
+      setStatus('Рисование контура', 'loading');
+
+      activeDrawHandler = new L.Draw.Polygon(map, {
+        allowIntersection: true,
+        showArea: true,
+        metric: true,
+        shapeOptions: parcelShapeOptions
+      });
+      activeDrawHandler.enable();
+    }
+  }
+
+  function finishPolygon() {
+    if (activeDrawHandler) {
+      if (activeDrawHandler.completeShape) {
+        activeDrawHandler.completeShape();
+      } else {
+        activeDrawHandler.disable();
+      }
+      activeDrawHandler = null;
+    }
+    document.getElementById('btn-finish-poly').style.display = 'none';
+    selectTool('view');
+  }
+
+  function toggleEdit() {
+    if (!drawnItems || drawnItems.getLayers().length === 0) {
+      showError('Сначала создайте границы участка на карте.');
+      return;
+    }
+
+    if (!editHandler) {
+      if (activeDrawHandler) {
+        activeDrawHandler.disable();
+        activeDrawHandler = null;
+        document.getElementById('btn-finish-poly').style.display = 'none';
+      }
+
+      currentTool = 'edit';
+      const btnView = document.getElementById('btn-tool-view');
+      const btnRect = document.getElementById('btn-tool-rect');
+      const btnPoly = document.getElementById('btn-tool-poly');
+      const btnEdit = document.getElementById('btn-tool-edit');
+
+      if (btnView) btnView.classList.remove('active');
+      if (btnRect) btnRect.classList.remove('active');
+      if (btnPoly) btnPoly.classList.remove('active');
+      if (btnEdit) btnEdit.classList.add('active');
+
+      document.getElementById('btn-edit-title').textContent = 'Сохранить правки';
+      document.getElementById('btn-edit-desc').textContent = 'Нажмите для фиксации';
+
+      editHandler = new L.EditToolbar.Edit(map, {
+        featureGroup: drawnItems
+      });
+      editHandler.enable();
+      setMenuHint('Тяните за вершины для изменения границ участка. После завершения нажмите «Сохранить правки».');
+      setStatus('Редактирование вершин', 'loading');
+    } else {
+      stopEdit();
+    }
+  }
+
+  function stopEdit() {
+    if (editHandler) {
+      editHandler.save();
+      editHandler.disable();
+      editHandler = null;
+    }
+
+    const btnEdit = document.getElementById('btn-tool-edit');
+    if (btnEdit) btnEdit.classList.remove('active');
+    document.getElementById('btn-edit-title').textContent = 'Редактировать';
+    document.getElementById('btn-edit-desc').textContent = 'Тяните за вершины';
+
+    if (currentLayer) {
+      updateParcelInfo(currentLayer);
+    }
+    setStatus('Границы сохранены', 'ready');
+    selectTool('view');
+  }
+
+  function clearBoundaries() {
+    if (editHandler) {
+      editHandler.disable();
+      editHandler = null;
+      const btnEdit = document.getElementById('btn-tool-edit');
+      if (btnEdit) btnEdit.classList.remove('active');
+      document.getElementById('btn-edit-title').textContent = 'Редактировать';
+      document.getElementById('btn-edit-desc').textContent = 'Тяните за вершины';
+    }
+    if (activeDrawHandler) {
+      activeDrawHandler.disable();
+      activeDrawHandler = null;
+      document.getElementById('btn-finish-poly').style.display = 'none';
+    }
+    if (boxPreviewLayer) {
+      map.removeLayer(boxPreviewLayer);
+      boxPreviewLayer = null;
+    }
+    isBoxSelecting = false;
+    boxStartLatLng = null;
+
+    if (drawnItems) {
+      drawnItems.clearLayers();
+    }
+    currentLayer = null;
+    resetParcelInfo();
+    setStatus('Границы участка очищены', '');
+    selectTool('view');
+  }
+
+    function loadDemoField() {
+    clearBoundaries();
+
+    const demoCoords = [
+      [55.51020, 60.87500],
+      [55.51550, 60.88200],
+      [55.51300, 60.89600],
+      [55.50600, 60.89400],
+      [55.50450, 60.88100]
+    ];
+
+    const polygon = L.polygon(demoCoords, parcelShapeOptions);
+    drawnItems.addLayer(polygon);
+    currentLayer = polygon;
+
+    map.fitBounds(polygon.getBounds(), { padding: [60, 60] });
+    updateParcelInfo(polygon);
+    setStatus('Загружен пример участка (Тестовый участок)', 'ready');
+    setMenuHint('Пример участка загружен! Можно редактировать вершины или запустить анализ.');
+    selectTool('view');
+  }
+
+  function initMap() {
+    if (typeof L === 'undefined') {
+      showError('Не удалось загрузить библиотеку карт Leaflet.');
+      return;
+    }
+
+    const chelyabinskBounds = [
+      [51.75, 57.00],
+      [56.40, 63.45]
+    ];
+
+    map = L.map('map', {
+      zoomControl: false,
+      boxZoom: false,
+      attributionControl: false,
+      maxBounds: chelyabinskBounds,
+      maxBoundsViscosity: 0.9,
+      minZoom: 7
+    });
+
+    map.fitBounds(chelyabinskBounds, { padding: [15, 15] });
+
+    L.control.zoom({ position: 'topright' }).addTo(map);
+
+    const satelliteLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+      maxZoom: 19
+    }).addTo(map);
+
+    const osmLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19
+    });
+
+    L.control.layers({
+      "Спутник (Esri World Imagery)": satelliteLayer,
+      "Схема OpenStreetMap": osmLayer
+    }, null, { position: 'topright' }).addTo(map);
+
+    drawnItems = new L.FeatureGroup();
+    map.addLayer(drawnItems);
+
+    map.on('mousedown', (e) => {
+      if (currentTool !== 'rect' && !e.originalEvent.shiftKey) return;
+      if (editHandler) return;
+
+      const target = e.originalEvent.target;
+      if (target.closest && (target.closest('.map-tools') || target.closest('.leaflet-control'))) {
+        return;
+      }
+
+      isBoxSelecting = true;
+      boxStartLatLng = e.latlng;
+      map.dragging.disable();
+
+      if (boxPreviewLayer) {
+        map.removeLayer(boxPreviewLayer);
+        boxPreviewLayer = null;
+      }
+    });
+
+    map.on('mousemove', (e) => {
+      if (editHandler && currentLayer) {
+        updateParcelInfo(currentLayer);
+      }
+
+      if (!isBoxSelecting || !boxStartLatLng) return;
+
+      const currentLatLng = e.latlng;
+      const bounds = L.latLngBounds(boxStartLatLng, currentLatLng);
+
+      if (!boxPreviewLayer) {
+        boxPreviewLayer = L.rectangle(bounds, previewShapeOptions).addTo(map);
+      } else {
+        boxPreviewLayer.setBounds(bounds);
+      }
+
+      const sw = bounds.getSouthWest();
+      const ne = bounds.getNorthEast();
+      const coords = [
+        [sw.lat, sw.lng],
+        [ne.lat, sw.lng],
+        [ne.lat, ne.lng],
+        [sw.lat, ne.lng]
+      ];
+      const areaHa = computeAreaHa(coords);
+      setMenuHint(`Рамка: ${areaHa.toFixed(2)} га. Отпустите мышь для фиксации границ.`);
+    });
+
+    const finishBoxSelect = (e) => {
+      if (!isBoxSelecting || !boxStartLatLng) return;
+      isBoxSelecting = false;
+      map.dragging.enable();
+
+      const endLatLng = e.latlng || boxStartLatLng;
+      const bounds = L.latLngBounds(boxStartLatLng, endLatLng);
+      boxStartLatLng = null;
+
+      if (boxPreviewLayer) {
+        map.removeLayer(boxPreviewLayer);
+        boxPreviewLayer = null;
+      }
+
+      const p1 = map.latLngToLayerPoint(bounds.getSouthWest());
+      const p2 = map.latLngToLayerPoint(bounds.getNorthEast());
+      const pixelDist = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+
+      if (pixelDist < 12) {
+        setMenuHint('Зажмите мышь и растяните рамку для выделения участка.');
+        return;
+      }
+
+      drawnItems.clearLayers();
+      const finalRect = L.rectangle(bounds, parcelShapeOptions);
+      drawnItems.addLayer(finalRect);
+      currentLayer = finalRect;
+
+      updateParcelInfo(finalRect);
+      setStatus('Границы участка созданы', 'ready');
+      selectTool('view');
+      setMenuHint('Участок выделен! Можно перемещать карту, редактировать вершины или запустить анализ.');
+    };
+
+    map.on('mouseup', finishBoxSelect);
+
+    document.addEventListener('mouseup', (e) => {
+      if (isBoxSelecting) {
+        isBoxSelecting = false;
+        map.dragging.enable();
+        if (boxPreviewLayer) {
+          const bounds = boxPreviewLayer.getBounds();
+          map.removeLayer(boxPreviewLayer);
+          boxPreviewLayer = null;
+
+          drawnItems.clearLayers();
+          const finalRect = L.rectangle(bounds, parcelShapeOptions);
+          drawnItems.addLayer(finalRect);
+          currentLayer = finalRect;
+
+          updateParcelInfo(finalRect);
+          setStatus('Границы участка созданы', 'ready');
+          selectTool('view');
+          setMenuHint('Участок выделен! Можно перемещать карту, редактировать вершины или запустить анализ.');
+        }
+      }
+    });
+
+    map.on(L.Draw.Event.CREATED, (e) => {
+      if (activeDrawHandler) {
+        activeDrawHandler.disable();
+        activeDrawHandler = null;
+      }
+      document.getElementById('btn-finish-poly').style.display = 'none';
+
+      drawnItems.clearLayers();
+      const layer = e.layer;
+      drawnItems.addLayer(layer);
+      currentLayer = layer;
+
+      updateParcelInfo(layer);
+      setStatus('Границы участка созданы', 'ready');
+      setMenuHint('Контур зафиксирован! Можно редактировать вершины или запустить анализ.');
+      selectTool('rect');
+    });
+
+    map.on(L.Draw.Event.EDITVERTEX, () => {
+      if (currentLayer) {
+        updateParcelInfo(currentLayer);
+      }
+    });
+
+    map.on(L.Draw.Event.DELETED, () => {
+      currentLayer = null;
+      resetParcelInfo();
+      setStatus('Границы участка удалены', '');
+    });
+  }
+
+  async function runAnalysis() {
+    const parcelId = document.getElementById('parcel-id').textContent;
+    
+    // Проверка на выбоор участка
+    if (!parcelId || parcelId === '—' || !parcelId.startsWith('P-')) {
+      showError('Сначала создайте границы участка на карте (или используйте пример).');
+      setStatus('Ошибка', 'error');
+      return;
+    }
+
+    hideError();
+    setStatus('В процессе...', 'loading');
+    document.getElementById('loader').style.display = 'inline-block';
+
+    try {
+      // 1. ЗАПРОС К API: Приёмка данных участка и экономики
+      const plotResponse = await fetch(`http://127.0.0.1:8000/api/plots/${parcelId}`);
+      
+      if (!plotResponse.ok) {
+        throw new Error('Участок не найден в базе данных (404)');
+      }
+      
+      const plotData = await plotResponse.json();
+
+      // 2. ЗАПРОС К API: Приёмка NDVI
+      const startDate = '2022-01-01';
+      const endDate = '2026-12-31';
+      const ndviResponse = await fetch(`http://127.0.0.1:8000/api/plots/${parcelId}/ndvi?start_date=${startDate}&end_date=${endDate}`);
+      
+      let ndviData = [];
+      if (ndviResponse.ok) {
+        ndviData = await ndviResponse.json();
+      }
+
+      // 3. ОБНОВЛЕНИЕ ИНТЕРФЕЙСА (Карточка участка)
+      document.getElementById('class').textContent = plotData.class_name || 'Не определен';
+      document.getElementById('quality').textContent = ndviData.length > 0 
+        ? `Снимков: ${ndviData.length}` 
+        : 'Нет данных';
+
+      // 4. ОБНОВЛЕНИЕ ИНТЕРФЕЙСА (Экономика - Модуль 4)
+      if (plotData.economics) {
+        document.getElementById('base-rate').textContent = 
+          plotData.economics.base_rate.toLocaleString('ru-RU') + ' ₽/га';
+        document.getElementById('recommended-rate').textContent = 
+          plotData.economics.recommended_rate.toLocaleString('ru-RU') + ' ₽/га';
+        document.getElementById('period').textContent = plotData.economics.period;
+      }
+
+      // 5. ГРАФИК NDVI (Chart.js)
+      if (ndviData.length > 0) {
+        const dates = ndviData.map(item => item.date);
+        const values = ndviData.map(item => item.ndvi_mean);
+
+        const ctx = document.getElementById('ndvi-chart').getContext('2d');
+        
+        // Удаление старого графика при наличии
+        if (window.myNdviChart) {
+          window.myNdviChart.destroy();
+        }
+
+        // Создадние нового графика
+        window.myNdviChart = new Chart(ctx, {
+          type: 'line',
+          data: {
+            labels: dates,
+            datasets: [{
+              label: 'Средний NDVI',
+              data: values,
+              borderColor: '#32a45a',
+              backgroundColor: 'rgba(50, 164, 90, 0.2)',
+              borderWidth: 3,
+              tension: 0.3, // Сглаживание линий
+              fill: true
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+              y: { min: 0, max: 1, title: { display: true, text: 'NDVI' } }
+            }
+          }
+        });
+      } else {
+        document.getElementById('ndvi-chart').textContent = 'Нет наблюдений NDVI';
+      }
+
+      setStatus('Готово', 'ready');
+
+    } catch (error) {
+      console.error(error);
+      showError(error.message || 'Ошибка соединения с сервером. Убедитесь, что FastAPI запущен.');
+      setStatus('Ошибка', 'error');
+    } finally {
+      document.getElementById('loader').style.display = 'none';
+    }
+  }
+
+  window.addEventListener('load', initMap);
+</script>
+
+</body>
+</html>
