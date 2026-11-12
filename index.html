@@ -956,11 +956,11 @@
       // 1. ЗАПРОС К API: Приёмка данных участка и экономики
       const plotResponse = await fetch(`http://78.154.103.9:16998/api/plots/${parcelId}`);
       
+      throw new Error('Статус: ' + plotResponse.status);
+
       if (!plotResponse.ok) {
         throw new Error('Участок не найден в базе данных (404)');
       }
-
-      throw new Error('Статус: ' + plotResponse.status);
       
       const plotData = await plotResponse.json();
 
