@@ -959,6 +959,8 @@
       if (!plotResponse.ok) {
         throw new Error('Участок не найден в базе данных (404)');
       }
+
+      throw new Error('Статус: ' + plotResponse.status);
       
       const plotData = await plotResponse.json();
 
