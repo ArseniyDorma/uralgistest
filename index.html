@@ -237,7 +237,39 @@
       background: #e5e7eb;
       color: #1f2937;
     }
-	
+
+    /* Панель анализа: месяц + кнопка */
+    .analyze-row {
+      display: flex;
+      align-items: flex-end;
+      gap: 10px;
+      margin-top: 14px;
+      flex-wrap: wrap;
+    }
+    .analyze-field {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .analyze-field label {
+      font-size: 12px;
+      color: #6b7280;
+    }
+    .analyze-field input[type="month"] {
+      font-family: inherit;
+      font-size: 14px;
+      padding: 7px 10px;
+      border: 1px solid #cbd5e1;
+      background: #ffffff;
+      color: #1f2937;
+      min-width: 160px;
+    }
+    .analyze-field input[type="month"]:focus {
+      outline: none;
+      border-color: #32a45a;
+      box-shadow: 0 0 0 2px rgba(50, 164, 90, 0.2);
+    }
+
 	.chart-container {
       width: 100%;
       height: 300px; /* Задаем высоту, чтобы график не растягивался */
@@ -247,6 +279,16 @@
     #ndvi-chart {
       width: 100% !important;
       height: 100% !important;
+    }
+
+    .empty-chart {
+      display: none;
+      text-align: center;
+      color: #6b7280;
+      padding: 12px;
+      font-size: 13px;
+      border: 1px dashed #d1d5db;
+      margin-top: 10px;
     }
 
     .error-box {
@@ -353,6 +395,16 @@
             </span>
           </button>
 
+          <button type="button" class="menu-btn" onclick="document.getElementById('gpkg-input').click()">
+            <span class="menu-btn-icon">⬆</span>
+            <span class="menu-btn-content">
+              <span>Загрузить GPKG/SHP</span>
+              <small>Импорт из файла</small>
+            </span>
+          </button>
+          <input type="file" id="gpkg-input" accept=".gpkg,.shp,.zip,.geojson,.json"
+                 style="display:none" onchange="uploadGeoFile(this.files[0])" />
+
           <button type="button" class="menu-btn danger" onclick="clearBoundaries()">
             <span class="menu-btn-icon">✕</span>
             <span class="menu-btn-content">
@@ -394,9 +446,16 @@
         <div class="label">Количество вершин</div>
         <div class="value" id="parcel-points">—</div>
       </div>
-      <div class="row" style="margin-top: 14px;">
+
+      <!-- Панель запуска анализа: месяц + кнопка -->
+      <div class="analyze-row">
+        <div class="analyze-field">
+          <label for="analysis-month">Месяц анализа</label>
+          <input type="month" id="analysis-month" />
+        </div>
         <button onclick="runAnalysis()">Анализировать</button>
       </div>
+
       <div id="error" class="error-box"></div>
       <div id="loader" class="loader"></div>
     </section>
@@ -411,6 +470,10 @@
         <div class="label">Качество данных</div>
         <div class="value" id="quality">—</div>
       </div>
+      <div class="row">
+        <div class="label">Коэффициент модели</div>
+        <div class="value" id="model-coefficient">—</div>
+      </div>
     </section>
 
     <section class="card full-width">
@@ -418,6 +481,7 @@
 		<div class="chart-container">
 			<canvas id="ndvi-chart"></canvas>
 		</div>
+		<div id="ndvi-empty" class="empty-chart">Нет пригодных наблюдений NDVI за период</div>
 	</section>
 
     <section class="card full-width">
@@ -457,6 +521,20 @@
 </script>
 
 <script>
+  // ================== КОНФИГУРАЦИЯ API ==================
+  // Если у Арсения пути без префикса /api — поменяйте API_PREFIX на ''.
+  const API_BASE   = 'http://78.154.103.9:16998';
+  const API_PREFIX = '/api';
+
+  // Эндпоинты (собраны в одном месте для быстрой правки при согласовании)
+  const URL_UPLOAD  = `${API_BASE}${API_PREFIX}/upload`;
+  const URL_ANALYZE = `${API_BASE}${API_PREFIX}/analyze`;
+  const URL_RESULT  = (taskId) => `${API_BASE}${API_PREFIX}/result/${encodeURIComponent(taskId)}`;
+
+  // Ограничение времени ожидания результата анализа
+  const ANALYSIS_TIMEOUT_MS = 5 * 60 * 1000; // 5 минут
+
+  // ================== СОСТОЯНИЕ КАРТЫ ==================
   let map;
   let drawnItems;
   let currentLayer = null;
@@ -467,6 +545,9 @@
   let isBoxSelecting = false;
   let boxStartLatLng = null;
   let boxPreviewLayer = null;
+
+  // Состояние long-polling
+  let pollAbort = null;
 
   const parcelShapeOptions = {
     color: '#16a34a',
@@ -485,6 +566,7 @@
     fillOpacity: 0.25
   };
 
+  // ================== УТИЛИТЫ UI ==================
   function setStatus(text, cls) {
     const el = document.getElementById('status');
     el.textContent = text;
@@ -514,6 +596,41 @@
     panel.classList.toggle('open');
   }
 
+  // ================== РАБОТА С МЕСЯЦЕМ АНАЛИЗА ==================
+  // Формат значения input[type="month"] — "YYYY-MM" (например "2025-06").
+  // Ровно в таком виде передаём в API (поле month).
+  function getAnalysisMonth() {
+    const el = document.getElementById('analysis-month');
+    return (el && el.value) ? el.value.trim() : '';
+  }
+
+  function isValidMonthValue(value) {
+    // YYYY-MM, месяц 01..12
+    if (!/^\d{4}-\d{2}$/.test(value)) return false;
+    const [y, m] = value.split('-').map(Number);
+    if (m < 1 || m > 12) return false;
+    if (y < 1970 || y > 2100) return false;
+    return true;
+  }
+
+  // Инициализация поля месяца текущим месяцем (если браузер не подставил сам)
+  function initAnalysisMonth() {
+    const el = document.getElementById('analysis-month');
+    if (!el) return;
+    if (!el.value) {
+      const now = new Date();
+      const yyyy = now.getFullYear();
+      const mm = String(now.getMonth() + 1).padStart(2, '0');
+      el.value = `${yyyy}-${mm}`;
+    }
+    // Не позволяем выбрать будущий месяц
+    const now = new Date();
+    const yyyy = now.getFullYear();
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    el.max = `${yyyy}-${mm}`;
+  }
+
+  // ================== ГЕОМЕТРИЧЕСКИЕ РАСЧЁТЫ ==================
   function computeAreaHa(latlngs) {
     const R = 6371000;
     let area = 0;
@@ -558,6 +675,7 @@
     return [];
   }
 
+  // ================== КАРТОЧКА УЧАСТКА ==================
   function updateParcelInfo(layer) {
     if (!layer) return;
     const latlngs = getLayerLatLngs(layer);
@@ -591,7 +709,36 @@
     document.getElementById('parcel-points').textContent = '—';
   }
 
-  // Выбор инструмента
+  function resetAnalysisResult() {
+    // Отменяем предыдущий long-polling, если он ещё висит
+    if (pollAbort) {
+      try { pollAbort.abort(); } catch (e) { /* ignore */ }
+      pollAbort = null;
+    }
+
+    document.getElementById('class').textContent = '—';
+    document.getElementById('quality').textContent = '—';
+    document.getElementById('model-coefficient').textContent = '—';
+    document.getElementById('base-rate').textContent = '—';
+    document.getElementById('recommended-rate').textContent = '—';
+    document.getElementById('period').textContent = '—';
+
+    // Очищаем график
+    if (window.myNdviChart) {
+      window.myNdviChart.destroy();
+      window.myNdviChart = null;
+    }
+    const canvas = document.getElementById('ndvi-chart');
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    const emptyEl = document.getElementById('ndvi-empty');
+    if (emptyEl) emptyEl.style.display = 'none';
+
+    document.getElementById('loader').style.display = 'none';
+  }
+
+  // ================== ВЫБОР ИНСТРУМЕНТА ==================
   function selectTool(tool) {
     if (editHandler) {
       stopEdit();
@@ -736,11 +883,12 @@
     }
     currentLayer = null;
     resetParcelInfo();
+    resetAnalysisResult();
     setStatus('Границы участка очищены', '');
     selectTool('view');
   }
 
-    function loadDemoField() {
+  function loadDemoField() {
     clearBoundaries();
 
     const demoCoords = [
@@ -762,6 +910,7 @@
     selectTool('view');
   }
 
+  // ================== ИНИЦИАЛИЗАЦИЯ КАРТЫ ==================
   function initMap() {
     if (typeof L === 'undefined') {
       showError('Не удалось загрузить библиотеку карт Leaflet.');
@@ -938,108 +1087,301 @@
     });
   }
 
+  // ================== ОТРИСОВКА РЕЗУЛЬТАТА АНАЛИЗА ==================
+  function renderAnalysisResult(result) {
+    if (!result) return;
+
+    // Ожидаемая структура ответа (согласовать с Арсением):
+    // {
+    //   status: "done",
+    //   parcel_id: "P-...",
+    //   month: "2025-06",
+    //   plot: { class_name, quality_text, ... },
+    //   ndvi: [ { date, ndvi_mean }, ... ],
+    //   economics: { base_rate, recommended_rate, period },
+    //   model: { coefficient, version }
+    // }
+    // Но поддерживаем и плоские варианты: result.class_name, result.base_rate и т.п.
+
+    const plot = result.plot || {};
+    const econ = result.economics || {};
+    const model = result.model || {};
+
+    const className = plot.class_name || result.class_name;
+    document.getElementById('class').textContent = className || 'Не определен';
+
+    const ndvi = result.ndvi || result.ndvi_series || [];
+    const qualityText = plot.quality_text || result.quality_text;
+    document.getElementById('quality').textContent = qualityText
+      || (ndvi.length ? `Снимков: ${ndvi.length}` : 'Нет данных');
+
+    // Коэффициент модели (п.3 текущего ТЗ)
+    const coeff = model.coefficient != null ? model.coefficient : result.model_coefficient;
+    document.getElementById('model-coefficient').textContent =
+      coeff != null ? Number(coeff).toFixed(4) : '—';
+
+    // Экономика
+    const baseRate = econ.base_rate != null ? econ.base_rate : result.base_rate;
+    const recRate  = econ.recommended_rate != null ? econ.recommended_rate : result.recommended_rate;
+    const period   = econ.period || result.period;
+
+    document.getElementById('base-rate').textContent =
+      baseRate != null ? Number(baseRate).toLocaleString('ru-RU') + ' ₽/га' : '—';
+    document.getElementById('recommended-rate').textContent =
+      recRate != null ? Number(recRate).toLocaleString('ru-RU') + ' ₽/га' : '—';
+    document.getElementById('period').textContent = period || '—';
+
+    // График NDVI
+    const emptyEl = document.getElementById('ndvi-empty');
+    const canvas = document.getElementById('ndvi-chart');
+    const ctx = canvas.getContext('2d');
+
+    if (window.myNdviChart) {
+      window.myNdviChart.destroy();
+      window.myNdviChart = null;
+    }
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    if (ndvi.length > 0) {
+      if (emptyEl) emptyEl.style.display = 'none';
+
+      const dates = ndvi.map(i => i.date);
+      const values = ndvi.map(i => i.ndvi_mean);
+
+      window.myNdviChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: dates,
+          datasets: [{
+            label: 'Средний NDVI',
+            data: values,
+            borderColor: '#32a45a',
+            backgroundColor: 'rgba(50, 164, 90, 0.2)',
+            borderWidth: 3,
+            tension: 0.3,
+            fill: true
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          scales: {
+            y: { min: 0, max: 1, title: { display: true, text: 'NDVI' } }
+          }
+        }
+      });
+    } else {
+      if (emptyEl) emptyEl.style.display = 'block';
+    }
+  }
+
+  // ================== ЗАПУСК АНАЛИЗА (async + long-polling) ==================
   async function runAnalysis() {
     const parcelId = document.getElementById('parcel-id').textContent;
-    
-    // Проверка на выбоор участка
+
+    // Проверка на выбор участка
     if (!parcelId || parcelId === '—' || !parcelId.startsWith('P-')) {
       showError('Сначала создайте границы участка на карте (или используйте пример).');
       setStatus('Ошибка', 'error');
       return;
     }
 
+    // Проверка месяца анализа (формат YYYY-MM)
+    const month = getAnalysisMonth();
+    if (!month) {
+      showError('Выберите месяц анализа.');
+      setStatus('Ошибка', 'error');
+      return;
+    }
+    if (!isValidMonthValue(month)) {
+      showError('Некорректный месяц анализа. Ожидается формат ГГГГ-ММ.');
+      setStatus('Ошибка', 'error');
+      return;
+    }
+
     hideError();
-    setStatus('В процессе...', 'loading');
+
+    // Отменяем предыдущий long-polling, если он ещё висит
+    if (pollAbort) {
+      try { pollAbort.abort(); } catch (e) { /* ignore */ }
+    }
+    pollAbort = new AbortController();
+    const signal = pollAbort.signal;
+
+    setStatus(`Запуск анализа за ${month}...`, 'loading');
     document.getElementById('loader').style.display = 'inline-block';
 
     try {
-      // 1. ЗАПРОС К API: Приёмка данных участка и экономики
-      const plotResponse = await fetch(`http://78.154.103.9:16998/api/plots/${parcelId}`);
-      
-      throw new Error('Статус: ' + plotResponse.status);
+      // 1. POST /analyze -> task_id, status: pending
+      const analyzeResp = await fetch(URL_ANALYZE, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          parcel_id: parcelId,
+          month: month  // "YYYY-MM"
+        }),
+        signal
+      });
 
-      if (!plotResponse.ok) {
-        throw new Error('Участок не найден в базе данных (404)');
-      }
-      
-      const plotData = await plotResponse.json();
-
-      // 2. ЗАПРОС К API: Приёмка NDVI
-      const startDate = '2022-01-01';
-      const endDate = '2026-12-31';
-      const ndviResponse = await fetch(`http://78.154.103.9:16998/api/plots/${parcelId}/ndvi?start_date=${startDate}&end_date=${endDate}`);
-      
-      let ndviData = [];
-      if (ndviResponse.ok) {
-        ndviData = await ndviResponse.json();
+      if (!analyzeResp.ok) {
+        const errText = await analyzeResp.text().catch(() => '');
+        throw new Error(`Не удалось запустить анализ: HTTP ${analyzeResp.status} ${errText}`);
       }
 
-      // 3. ОБНОВЛЕНИЕ ИНТЕРФЕЙСА (Карточка участка)
-      document.getElementById('class').textContent = plotData.class_name || 'Не определен';
-      document.getElementById('quality').textContent = ndviData.length > 0 
-        ? `Снимков: ${ndviData.length}` 
-        : 'Нет данных';
-
-      // 4. ОБНОВЛЕНИЕ ИНТЕРФЕЙСА (Экономика - Модуль 4)
-      if (plotData.economics) {
-        document.getElementById('base-rate').textContent = 
-          plotData.economics.base_rate.toLocaleString('ru-RU') + ' ₽/га';
-        document.getElementById('recommended-rate').textContent = 
-          plotData.economics.recommended_rate.toLocaleString('ru-RU') + ' ₽/га';
-        document.getElementById('period').textContent = plotData.economics.period;
+      const analyzeData = await analyzeResp.json();
+      const taskId = analyzeData.task_id;
+      if (!taskId) {
+        throw new Error('Сервер не вернул task_id. Проверьте контракт API /analyze.');
       }
 
-      // 5. ГРАФИК NDVI (Chart.js)
-      if (ndviData.length > 0) {
-        const dates = ndviData.map(item => item.date);
-        const values = ndviData.map(item => item.ndvi_mean);
+      setStatus(`Анализ за ${month} выполняется (task ${taskId})...`, 'loading');
 
-        const ctx = document.getElementById('ndvi-chart').getContext('2d');
-        
-        // Удаление старого графика при наличии
-        if (window.myNdviChart) {
-          window.myNdviChart.destroy();
+      // 2. Long-polling GET /result/{task_id}
+      // Сервер сам держит соединение 20-25 секунд и отвечает pending,
+      // браузер сразу отправляет новый GET.
+      const startedAt = Date.now();
+      let result = null;
+
+      while (true) {
+        if (Date.now() - startedAt > ANALYSIS_TIMEOUT_MS) {
+          throw new Error('Превышено время ожидания результата анализа');
         }
 
-        // Создадние нового графика
-        window.myNdviChart = new Chart(ctx, {
-          type: 'line',
-          data: {
-            labels: dates,
-            datasets: [{
-              label: 'Средний NDVI',
-              data: values,
-              borderColor: '#32a45a',
-              backgroundColor: 'rgba(50, 164, 90, 0.2)',
-              borderWidth: 3,
-              tension: 0.3, // Сглаживание линий
-              fill: true
-            }]
-          },
-          options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            scales: {
-              y: { min: 0, max: 1, title: { display: true, text: 'NDVI' } }
-            }
-          }
-        });
-      } else {
-        document.getElementById('ndvi-chart').textContent = 'Нет наблюдений NDVI';
+        const pollResp = await fetch(URL_RESULT(taskId), { signal });
+
+        if (!pollResp.ok) {
+          const errText = await pollResp.text().catch(() => '');
+          throw new Error(`Ошибка опроса результата: HTTP ${pollResp.status} ${errText}`);
+        }
+
+        const data = await pollResp.json();
+        const st = (data.status || '').toLowerCase();
+
+        if (st === 'done' || st === 'completed' || st === 'success') {
+          result = data;
+          break;
+        }
+        if (st === 'failed' || st === 'error') {
+          throw new Error(data.error || data.message || 'Анализ завершился с ошибкой');
+        }
+
+        // pending / running / queued — повторяем запрос
+        setStatus(`Анализ за ${month} выполняется... (${st || 'pending'})`, 'loading');
+        // Небольшая пауза на случай, если сервер ответил мгновенно,
+        // чтобы не забивать сеть в tight-loop.
+        await new Promise(r => setTimeout(r, 300));
       }
 
-      setStatus('Готово', 'ready');
+      // 3. Отрисовка результата
+      renderAnalysisResult(result);
+      setStatus(`Готово (${result.month || month})`, 'ready');
 
-    } catch (error) {
-      console.error(error);
-      showError(error.message || 'Ошибка соединения с сервером. Убедитесь, что FastAPI запущен.');
+    } catch (err) {
+      if (err.name === 'AbortError') {
+        // Запрос отменён (например, при очистке границ) — не показываем ошибку
+        return;
+      }
+      console.error(err);
+      showError(err.message || 'Ошибка соединения с сервером. Убедитесь, что FastAPI запущен.');
       setStatus('Ошибка', 'error');
     } finally {
       document.getElementById('loader').style.display = 'none';
+      pollAbort = null;
     }
   }
 
-  window.addEventListener('load', initMap);
+  // ================== ЗАГРУЗКА GPKG / SHP ==================
+  async function uploadGeoFile(file) {
+    if (!file) return;
+
+    const allowed = ['gpkg', 'shp', 'zip', 'geojson', 'json'];
+    const ext = file.name.split('.').pop().toLowerCase();
+    if (!allowed.includes(ext)) {
+      showError('Недопустимый формат. Разрешены: .gpkg, .zip (SHP), .geojson');
+      return;
+    }
+    if (file.size > 50 * 1024 * 1024) {
+      showError('Файл слишком большой (макс. 50 МБ)');
+      return;
+    }
+
+    hideError();
+    // Сбрасываем результаты предыдущего анализа перед новой загрузкой
+    resetAnalysisResult();
+
+    setStatus('Загрузка файла...', 'loading');
+    document.getElementById('loader').style.display = 'inline-block';
+
+    try {
+      const formData = new FormData();
+      // Поле должно совпадать с параметром в FastAPI: file: UploadFile = File(...)
+      formData.append('file', file);
+
+      const response = await fetch(URL_UPLOAD, {
+        method: 'POST',
+        body: formData
+        // НЕ устанавливаем Content-Type — браузер сам проставит multipart boundary
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`HTTP ${response.status}: ${errText || 'Ошибка сервера'}`);
+      }
+
+      const result = await response.json();
+      console.log('Upload result:', result);
+
+      // Ожидаемый ответ (согласовать с Константином/Арсением):
+      // { "parcel_id": "P-...", "area_ha": 42.1, "geometry": {...}, "center": {...} }
+      // Поддерживаем также старое имя plot_id.
+      const newId = result.parcel_id || result.plot_id;
+      if (!newId) {
+        throw new Error('Сервер не вернул идентификатор участка (parcel_id). Проверьте контракт API.');
+      }
+
+      // Подставляем ID в карточку
+      document.getElementById('parcel-id').textContent = newId;
+      if (result.area_ha != null) {
+        document.getElementById('parcel-area').textContent =
+          `${Number(result.area_ha).toFixed(2)} га`;
+      }
+      if (result.center && result.center.lat != null && result.center.lng != null) {
+        document.getElementById('parcel-coords').textContent =
+          `${Number(result.center.lat).toFixed(5)}, ${Number(result.center.lng).toFixed(5)}`;
+      }
+
+      // Отрисовываем контур на карте (если вернули geometry — GeoJSON)
+      if (result.geometry) {
+        drawnItems.clearLayers();
+        const geoLayer = L.geoJSON(result.geometry, { style: parcelShapeOptions });
+        drawnItems.addLayer(geoLayer);
+        currentLayer = geoLayer;
+        map.fitBounds(geoLayer.getBounds(), { padding: [60, 60] });
+      }
+
+      setStatus(`Файл загружен: ${newId}`, 'ready');
+      setMenuHint('Участок импортирован. Выберите месяц и запустите анализ.');
+
+      // Автоматически запускаем анализ только если месяц выбран
+      if (getAnalysisMonth()) {
+        await runAnalysis();
+      }
+
+    } catch (err) {
+      console.error(err);
+      showError(`Ошибка загрузки: ${err.message}`);
+      setStatus('Ошибка загрузки', 'error');
+    } finally {
+      document.getElementById('loader').style.display = 'none';
+      document.getElementById('gpkg-input').value = ''; // сброс, чтобы можно было выбрать тот же файл
+    }
+  }
+
+  // Инициализация поля месяца до инициализации карты
+  window.addEventListener('load', () => {
+    initAnalysisMonth();
+    initMap();
+  });
 </script>
 
 </body>
