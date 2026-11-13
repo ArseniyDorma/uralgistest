@@ -542,6 +542,10 @@
   let activeDrawHandler = null;
   let editHandler = null;
 
+  // Признак того, что текущий участок пришёл с сервера (есть настоящий parcel_id).
+  // Для рисованных вручную контуров и примера — false, ID генерируется локально.
+  let currentParcelId = null;
+
   let isBoxSelecting = false;
   let boxStartLatLng = null;
   let boxPreviewLayer = null;
@@ -676,7 +680,10 @@
   }
 
   // ================== КАРТОЧКА УЧАСТКА ==================
-  function updateParcelInfo(layer) {
+  // Принимает слой и (опционально) серверный parcel_id.
+  // Если parcel_id передан — значит участок пришёл с сервера (например, через /upload).
+  // Если нет — генерируем локальный ID по центру (для рисования/примера).
+  function updateParcelInfo(layer, serverParcelId) {
     if (!layer) return;
     const latlngs = getLayerLatLngs(layer);
     if (!latlngs || latlngs.length === 0) return;
@@ -689,7 +696,9 @@
     const areaHa = computeAreaHa(coordsArray);
     const perimeterKm = computePerimeterKm(latlngs);
 
-    const id = `P-${lat.toFixed(4)}_${lng.toFixed(4)}`;
+    const id = serverParcelId || `P-${lat.toFixed(4)}_${lng.toFixed(4)}`;
+    currentParcelId = serverParcelId || null;
+
     document.getElementById('parcel-id').textContent = id;
     document.getElementById('parcel-coords').textContent = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
     document.getElementById('parcel-area').textContent = `${areaHa.toFixed(2)} га (${Math.round(areaHa * 10000).toLocaleString('ru-RU')} м²)`;
@@ -702,6 +711,7 @@
   }
 
   function resetParcelInfo() {
+    currentParcelId = null;
     document.getElementById('parcel-id').textContent = '—';
     document.getElementById('parcel-coords').textContent = '—';
     document.getElementById('parcel-area').textContent = '—';
@@ -851,7 +861,8 @@
     document.getElementById('btn-edit-desc').textContent = 'Тяните за вершины';
 
     if (currentLayer) {
-      updateParcelInfo(currentLayer);
+      // Если участок был с сервера — сохраняем его parcel_id при редактировании
+      updateParcelInfo(currentLayer, currentParcelId);
     }
     setStatus('Границы сохранены', 'ready');
     selectTool('view');
@@ -904,6 +915,7 @@
     currentLayer = polygon;
 
     map.fitBounds(polygon.getBounds(), { padding: [60, 60] });
+    // Для примера серверного parcel_id нет — updateParcelInfo сгенерирует локальный
     updateParcelInfo(polygon);
     setStatus('Загружен пример участка (Тестовый участок)', 'ready');
     setMenuHint('Пример участка загружен! Можно редактировать вершины или запустить анализ.');
@@ -972,7 +984,7 @@
 
     map.on('mousemove', (e) => {
       if (editHandler && currentLayer) {
-        updateParcelInfo(currentLayer);
+        updateParcelInfo(currentLayer, currentParcelId);
       }
 
       if (!isBoxSelecting || !boxStartLatLng) return;
@@ -1076,7 +1088,7 @@
 
     map.on(L.Draw.Event.EDITVERTEX, () => {
       if (currentLayer) {
-        updateParcelInfo(currentLayer);
+        updateParcelInfo(currentLayer, currentParcelId);
       }
     });
 
@@ -1177,11 +1189,13 @@
 
   // ================== ЗАПУСК АНАЛИЗА (async + long-polling) ==================
   async function runAnalysis() {
-    const parcelId = document.getElementById('parcel-id').textContent;
+    // КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: ID участка теперь может быть коротким hex-UUID от сервера
+    // (например "a1b2c3d4"), а не только "P-lat_lng". Проверяем просто «не пусто».
+    const parcelIdEl = document.getElementById('parcel-id');
+    const parcelId = (parcelIdEl.textContent || '').trim();
 
-    // Проверка на выбор участка
-    if (!parcelId || parcelId === '—' || !parcelId.startsWith('P-')) {
-      showError('Сначала создайте границы участка на карте (или используйте пример).');
+    if (!parcelId || parcelId === '—') {
+      showError('Сначала загрузите GPKG, создайте границы участка на карте (или используйте пример).');
       setStatus('Ошибка', 'error');
       return;
     }
@@ -1328,41 +1342,56 @@
         throw new Error(`HTTP ${response.status}: ${errText || 'Ошибка сервера'}`);
       }
 
+      // Реальный контракт POST /upload (UploadResponse):
+      // {
+      //   "parcel_id": "a1b2c3d4",
+      //   "filename": "contour.gpkg",
+      //   "geojson": { "type": "Feature", "properties": {...}, "geometry": {...} },
+      //   "message": "..."
+      // }
       const result = await response.json();
       console.log('Upload result:', result);
 
-      // Ожидаемый ответ (согласовать с Константином/Арсением):
-      // { "parcel_id": "P-...", "area_ha": 42.1, "geometry": {...}, "center": {...} }
-      // Поддерживаем также старое имя plot_id.
-      const newId = result.parcel_id || result.plot_id;
-      if (!newId) {
-        throw new Error('Сервер не вернул идентификатор участка (parcel_id). Проверьте контракт API.');
+      const newParcelId = result.parcel_id;
+      if (!newParcelId) {
+        throw new Error('Сервер не вернул parcel_id. Проверьте контракт POST /upload.');
       }
 
-      // Подставляем ID в карточку
-      document.getElementById('parcel-id').textContent = newId;
-      if (result.area_ha != null) {
+      // Поддерживаем и старое имя поля geometry на случай смены контракта
+      const geojson = result.geojson || result.geometry;
+      if (!geojson) {
+        throw new Error('Сервер не вернул контур (geojson). Проверьте контракт POST /upload.');
+      }
+
+      // Отрисовываем контур на карте
+      drawnItems.clearLayers();
+      const geoLayer = L.geoJSON(geojson, { style: parcelShapeOptions });
+      drawnItems.addLayer(geoLayer);
+
+      // ВАЖНО: currentLayer должен быть полигоном/прямоугольником,
+      // чтобы getLayerLatLngs() и getBounds() работали корректно.
+      // L.geoJSON возвращает FeatureGroup — берём первый дочерний слой-полигон.
+      const polygonLayer = pickPolygonFromGeoLayer(geoLayer);
+      currentLayer = polygonLayer || geoLayer;
+
+      // Центр/площадь/периметр считаем на клиенте из геометрии
+      map.fitBounds(geoLayer.getBounds(), { padding: [60, 60] });
+
+      // Передаём серверный parcel_id, чтобы он отобразился в карточке
+      updateParcelInfo(currentLayer, newParcelId);
+
+      // В карточке также полезно показать исходное имя файла и area_ha из properties (если есть)
+      const props = (geojson.properties || {});
+      if (props.area_ha != null) {
+        // Перезаписываем площадь значением из свойств контура (серверная оценка)
         document.getElementById('parcel-area').textContent =
-          `${Number(result.area_ha).toFixed(2)} га`;
-      }
-      if (result.center && result.center.lat != null && result.center.lng != null) {
-        document.getElementById('parcel-coords').textContent =
-          `${Number(result.center.lat).toFixed(5)}, ${Number(result.center.lng).toFixed(5)}`;
+          `${Number(props.area_ha).toFixed(2)} га (из свойств контура)`;
       }
 
-      // Отрисовываем контур на карте (если вернули geometry — GeoJSON)
-      if (result.geometry) {
-        drawnItems.clearLayers();
-        const geoLayer = L.geoJSON(result.geometry, { style: parcelShapeOptions });
-        drawnItems.addLayer(geoLayer);
-        currentLayer = geoLayer;
-        map.fitBounds(geoLayer.getBounds(), { padding: [60, 60] });
-      }
+      setStatus(`Файл загружен: ${newParcelId}`, 'ready');
+      setMenuHint(result.message || 'Участок импортирован. Выберите месяц и запустите анализ.');
 
-      setStatus(`Файл загружен: ${newId}`, 'ready');
-      setMenuHint('Участок импортирован. Выберите месяц и запустите анализ.');
-
-      // Автоматически запускаем анализ только если месяц выбран
+      // Автоматически запускаем анализ, если месяц выбран
       if (getAnalysisMonth()) {
         await runAnalysis();
       }
@@ -1375,6 +1404,26 @@
       document.getElementById('loader').style.display = 'none';
       document.getElementById('gpkg-input').value = ''; // сброс, чтобы можно было выбрать тот же файл
     }
+  }
+
+  // Достаёт первый полигон из L.GeoJSON FeatureGroup.
+  // Нужно, потому что updateParcelInfo ожидает L.Polygon/L.Rectangle,
+  // а L.geoJSON возвращает FeatureGroup, у которого getLatLngs() нет.
+  function pickPolygonFromGeoLayer(geoLayer) {
+    if (!geoLayer) return null;
+    if (geoLayer instanceof L.Polygon || geoLayer instanceof L.Rectangle) {
+      return geoLayer;
+    }
+    if (typeof geoLayer.eachLayer === 'function') {
+      let found = null;
+      geoLayer.eachLayer((l) => {
+        if (!found && (l instanceof L.Polygon || l instanceof L.Rectangle)) {
+          found = l;
+        }
+      });
+      return found;
+    }
+    return null;
   }
 
   // Инициализация поля месяца до инициализации карты
