@@ -617,21 +617,18 @@
     return true;
   }
 
-  // Инициализация поля месяца текущим месяцем (если браузер не подставил сам)
+  // Настройка поля месяца.
+  // ВАЖНО: значение по умолчанию НЕ подставляем — пользователь должен
+  // сам осознанно выбрать месяц и нажать «Анализировать».
   function initAnalysisMonth() {
     const el = document.getElementById('analysis-month');
     if (!el) return;
-    if (!el.value) {
-      const now = new Date();
-      const yyyy = now.getFullYear();
-      const mm = String(now.getMonth() + 1).padStart(2, '0');
-      el.value = `${yyyy}-${mm}`;
-    }
-    // Не позволяем выбрать будущий месяц
+    // Ограничиваем выбор будущими месяцами
     const now = new Date();
     const yyyy = now.getFullYear();
     const mm = String(now.getMonth() + 1).padStart(2, '0');
     el.max = `${yyyy}-${mm}`;
+    // el.value оставляем пустым
   }
 
   // ================== ГЕОМЕТРИЧЕСКИЕ РАСЧЁТЫ ==================
@@ -918,7 +915,7 @@
     // Для примера серверного parcel_id нет — updateParcelInfo сгенерирует локальный
     updateParcelInfo(polygon);
     setStatus('Загружен пример участка (Тестовый участок)', 'ready');
-    setMenuHint('Пример участка загружен! Можно редактировать вершины или запустить анализ.');
+    setMenuHint('Пример участка загружен! Выберите месяц и нажмите «Анализировать».');
     selectTool('view');
   }
 
@@ -1041,7 +1038,7 @@
       updateParcelInfo(finalRect);
       setStatus('Границы участка созданы', 'ready');
       selectTool('view');
-      setMenuHint('Участок выделен! Можно перемещать карту, редактировать вершины или запустить анализ.');
+      setMenuHint('Участок выделен! Выберите месяц и нажмите «Анализировать».');
     };
 
     map.on('mouseup', finishBoxSelect);
@@ -1063,7 +1060,7 @@
           updateParcelInfo(finalRect);
           setStatus('Границы участка созданы', 'ready');
           selectTool('view');
-          setMenuHint('Участок выделен! Можно перемещать карту, редактировать вершины или запустить анализ.');
+          setMenuHint('Участок выделен! Выберите месяц и нажмите «Анализировать».');
         }
       }
     });
@@ -1082,7 +1079,7 @@
 
       updateParcelInfo(layer);
       setStatus('Границы участка созданы', 'ready');
-      setMenuHint('Контур зафиксирован! Можно редактировать вершины или запустить анализ.');
+      setMenuHint('Контур зафиксирован! Выберите месяц и нажмите «Анализировать».');
       selectTool('rect');
     });
 
@@ -1189,8 +1186,8 @@
 
   // ================== ЗАПУСК АНАЛИЗА (async + long-polling) ==================
   async function runAnalysis() {
-    // КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: ID участка теперь может быть коротким hex-UUID от сервера
-    // (например "a1b2c3d4"), а не только "P-lat_lng". Проверяем просто «не пусто».
+    // ID участка может быть коротким hex-UUID от сервера (например "a1b2c3d4"),
+    // а может быть локальным "P-lat_lng". Проверяем просто «не пусто».
     const parcelIdEl = document.getElementById('parcel-id');
     const parcelId = (parcelIdEl.textContent || '').trim();
 
@@ -1368,7 +1365,7 @@
       const geoLayer = L.geoJSON(geojson, { style: parcelShapeOptions });
       drawnItems.addLayer(geoLayer);
 
-      // ВАЖНО: currentLayer должен быть полигоном/прямоугольником,
+      // Важно: currentLayer должен быть полигоном/прямоугольником,
       // чтобы getLayerLatLngs() и getBounds() работали корректно.
       // L.geoJSON возвращает FeatureGroup — берём первый дочерний слой-полигон.
       const polygonLayer = pickPolygonFromGeoLayer(geoLayer);
@@ -1389,12 +1386,11 @@
       }
 
       setStatus(`Файл загружен: ${newParcelId}`, 'ready');
-      setMenuHint(result.message || 'Участок импортирован. Выберите месяц и запустите анализ.');
-
-      // Автоматически запускаем анализ, если месяц выбран
-      if (getAnalysisMonth()) {
-        await runAnalysis();
-      }
+      // ВАЖНО: анализ здесь НЕ запускаем — пользователь сам выберет месяц
+      // и нажмёт «Анализировать». Подсказка приглашает к этому.
+      setMenuHint(result.message
+        ? `${result.message} Выберите месяц и нажмите «Анализировать».`
+        : 'Участок импортирован. Выберите месяц и нажмите «Анализировать».');
 
     } catch (err) {
       console.error(err);
