@@ -270,9 +270,9 @@
       box-shadow: 0 0 0 2px rgba(50, 164, 90, 0.2);
     }
 
-	.chart-container {
+    .chart-container {
       width: 100%;
-      height: 300px; /* Задаем высоту, чтобы график не растягивался */
+      height: 300px;
       position: relative;
     }
 
@@ -522,17 +522,15 @@
 
 <script>
   // ================== КОНФИГУРАЦИЯ API ==================
-  // Если у Арсения пути без префикса /api — поменяйте API_PREFIX на ''.
   const API_BASE   = 'http://78.154.103.9:16998';
   const API_PREFIX = '/api';
 
-  // Эндпоинты (собраны в одном месте для быстрой правки при согласовании)
-  const URL_UPLOAD  = `${API_BASE}${API_PREFIX}/upload`;
-  const URL_ANALYZE = `${API_BASE}${API_PREFIX}/analyze`;
-  const URL_RESULT  = (taskId) => `${API_BASE}${API_PREFIX}/result/${encodeURIComponent(taskId)}`;
+  const URL_UPLOAD        = `${API_BASE}${API_PREFIX}/upload`;
+  const URL_CREATE_PARCEL = `${API_BASE}${API_PREFIX}/parcels`;
+  const URL_ANALYZE       = `${API_BASE}${API_PREFIX}/analyze`;
+  const URL_RESULT        = (taskId) => `${API_BASE}${API_PREFIX}/result/${encodeURIComponent(taskId)}`;
 
-  // Ограничение времени ожидания результата анализа
-  const ANALYSIS_TIMEOUT_MS = 5 * 60 * 1000; // 5 минут
+  const ANALYSIS_TIMEOUT_MS = 5 * 60 * 1000;
 
   // ================== СОСТОЯНИЕ КАРТЫ ==================
   let map;
@@ -542,11 +540,16 @@
   let activeDrawHandler = null;
   let editHandler = null;
 
+  // Признак того, что текущий участок пришёл с сервера (есть настоящий parcel_id).
+  let currentParcelId = null;
+
+  // Чтобы не отправлять POST /parcels повторно, если сервер уже вернул ID
+  let parcelSyncedToServer = false;
+
   let isBoxSelecting = false;
   let boxStartLatLng = null;
   let boxPreviewLayer = null;
 
-  // Состояние long-polling
   let pollAbort = null;
 
   const parcelShapeOptions = {
@@ -588,7 +591,6 @@
     document.getElementById('error').style.display = 'none';
   }
 
-  // Выпадающая вкладка
   function toggleTools() {
     const toggle = document.getElementById('tools-toggle');
     const panel = document.getElementById('tools-panel');
@@ -597,15 +599,12 @@
   }
 
   // ================== РАБОТА С МЕСЯЦЕМ АНАЛИЗА ==================
-  // Формат значения input[type="month"] — "YYYY-MM" (например "2025-06").
-  // Ровно в таком виде передаём в API (поле month).
   function getAnalysisMonth() {
     const el = document.getElementById('analysis-month');
     return (el && el.value) ? el.value.trim() : '';
   }
 
   function isValidMonthValue(value) {
-    // YYYY-MM, месяц 01..12
     if (!/^\d{4}-\d{2}$/.test(value)) return false;
     const [y, m] = value.split('-').map(Number);
     if (m < 1 || m > 12) return false;
@@ -613,17 +612,9 @@
     return true;
   }
 
-  // Инициализация поля месяца текущим месяцем (если браузер не подставил сам)
   function initAnalysisMonth() {
     const el = document.getElementById('analysis-month');
     if (!el) return;
-    if (!el.value) {
-      const now = new Date();
-      const yyyy = now.getFullYear();
-      const mm = String(now.getMonth() + 1).padStart(2, '0');
-      el.value = `${yyyy}-${mm}`;
-    }
-    // Не позволяем выбрать будущий месяц
     const now = new Date();
     const yyyy = now.getFullYear();
     const mm = String(now.getMonth() + 1).padStart(2, '0');
@@ -676,7 +667,7 @@
   }
 
   // ================== КАРТОЧКА УЧАСТКА ==================
-  function updateParcelInfo(layer) {
+  function updateParcelInfo(layer, serverParcelId, serverAreaHa) {
     if (!layer) return;
     const latlngs = getLayerLatLngs(layer);
     if (!latlngs || latlngs.length === 0) return;
@@ -686,13 +677,16 @@
     const lng = center.lng;
 
     const coordsArray = latlngs.map(p => [p.lat, p.lng]);
-    const areaHa = computeAreaHa(coordsArray);
+    const areaHa = serverAreaHa != null ? Number(serverAreaHa) : computeAreaHa(coordsArray);
     const perimeterKm = computePerimeterKm(latlngs);
 
-    const id = `P-${lat.toFixed(4)}_${lng.toFixed(4)}`;
+    const id = serverParcelId || `P-${lat.toFixed(4)}_${lng.toFixed(4)}`;
+    currentParcelId = serverParcelId || null;
+
     document.getElementById('parcel-id').textContent = id;
     document.getElementById('parcel-coords').textContent = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
-    document.getElementById('parcel-area').textContent = `${areaHa.toFixed(2)} га (${Math.round(areaHa * 10000).toLocaleString('ru-RU')} м²)`;
+    document.getElementById('parcel-area').textContent =
+      `${areaHa.toFixed(2)} га (${Math.round(areaHa * 10000).toLocaleString('ru-RU')} м²)`;
     document.getElementById('parcel-perimeter').textContent = perimeterKm < 1 ?
       `${Math.round(perimeterKm * 1000)} м` :
       `${perimeterKm.toFixed(2)} км`;
@@ -702,6 +696,8 @@
   }
 
   function resetParcelInfo() {
+    currentParcelId = null;
+    parcelSyncedToServer = false;
     document.getElementById('parcel-id').textContent = '—';
     document.getElementById('parcel-coords').textContent = '—';
     document.getElementById('parcel-area').textContent = '—';
@@ -710,7 +706,6 @@
   }
 
   function resetAnalysisResult() {
-    // Отменяем предыдущий long-polling, если он ещё висит
     if (pollAbort) {
       try { pollAbort.abort(); } catch (e) { /* ignore */ }
       pollAbort = null;
@@ -723,7 +718,6 @@
     document.getElementById('recommended-rate').textContent = '—';
     document.getElementById('period').textContent = '—';
 
-    // Очищаем график
     if (window.myNdviChart) {
       window.myNdviChart.destroy();
       window.myNdviChart = null;
@@ -838,7 +832,7 @@
     }
   }
 
-  function stopEdit() {
+  async function stopEdit() {
     if (editHandler) {
       editHandler.save();
       editHandler.disable();
@@ -851,7 +845,9 @@
     document.getElementById('btn-edit-desc').textContent = 'Тяните за вершины';
 
     if (currentLayer) {
-      updateParcelInfo(currentLayer);
+      // После редактирования отправляем участок на сервер заново,
+      // потому что геометрия изменилась
+      await saveDrawnParcel(currentLayer, 'Поле (изменено)');
     }
     setStatus('Границы сохранены', 'ready');
     selectTool('view');
@@ -904,9 +900,12 @@
     currentLayer = polygon;
 
     map.fitBounds(polygon.getBounds(), { padding: [60, 60] });
-    updateParcelInfo(polygon);
-    setStatus('Загружен пример участка (Тестовый участок)', 'ready');
-    setMenuHint('Пример участка загружен! Можно редактировать вершины или запустить анализ.');
+    
+    // Демо-данные тоже отправляем на сервер (чтобы был честный API-ответ)
+    saveDrawnParcel(polygon, 'Пример участка');
+
+    setStatus('Загружен пример участка', 'ready');
+    setMenuHint('Пример участка загружен! Выберите месяц и нажмите «Анализировать».');
     selectTool('view');
   }
 
@@ -972,7 +971,7 @@
 
     map.on('mousemove', (e) => {
       if (editHandler && currentLayer) {
-        updateParcelInfo(currentLayer);
+        updateParcelInfo(currentLayer, currentParcelId);
       }
 
       if (!isBoxSelecting || !boxStartLatLng) return;
@@ -998,7 +997,7 @@
       setMenuHint(`Рамка: ${areaHa.toFixed(2)} га. Отпустите мышь для фиксации границ.`);
     });
 
-    const finishBoxSelect = (e) => {
+    const finishBoxSelect = async (e) => {
       if (!isBoxSelecting || !boxStartLatLng) return;
       isBoxSelecting = false;
       map.dragging.enable();
@@ -1026,15 +1025,17 @@
       drawnItems.addLayer(finalRect);
       currentLayer = finalRect;
 
-      updateParcelInfo(finalRect);
+      // Отправляем на сервер
+      await saveDrawnParcel(finalRect, 'Новое поле');
+
       setStatus('Границы участка созданы', 'ready');
       selectTool('view');
-      setMenuHint('Участок выделен! Можно перемещать карту, редактировать вершины или запустить анализ.');
+      setMenuHint('Участок выделен и сохранён! Выберите месяц и нажмите «Анализировать».');
     };
 
     map.on('mouseup', finishBoxSelect);
 
-    document.addEventListener('mouseup', (e) => {
+    document.addEventListener('mouseup', async (e) => {
       if (isBoxSelecting) {
         isBoxSelecting = false;
         map.dragging.enable();
@@ -1048,15 +1049,16 @@
           drawnItems.addLayer(finalRect);
           currentLayer = finalRect;
 
-          updateParcelInfo(finalRect);
+          await saveDrawnParcel(finalRect, 'Новое поле');
+
           setStatus('Границы участка созданы', 'ready');
           selectTool('view');
-          setMenuHint('Участок выделен! Можно перемещать карту, редактировать вершины или запустить анализ.');
+          setMenuHint('Участок выделен и сохранён! Выберите месяц и нажмите «Анализировать».');
         }
       }
     });
 
-    map.on(L.Draw.Event.CREATED, (e) => {
+    map.on(L.Draw.Event.CREATED, async (e) => {
       if (activeDrawHandler) {
         activeDrawHandler.disable();
         activeDrawHandler = null;
@@ -1068,15 +1070,17 @@
       drawnItems.addLayer(layer);
       currentLayer = layer;
 
-      updateParcelInfo(layer);
+      // Отправляем на сервер
+      await saveDrawnParcel(layer, 'Новое поле');
+
       setStatus('Границы участка созданы', 'ready');
-      setMenuHint('Контур зафиксирован! Можно редактировать вершины или запустить анализ.');
+      setMenuHint('Контур зафиксирован и сохранён! Выберите месяц и нажмите «Анализировать».');
       selectTool('rect');
     });
 
     map.on(L.Draw.Event.EDITVERTEX, () => {
       if (currentLayer) {
-        updateParcelInfo(currentLayer);
+        updateParcelInfo(currentLayer, currentParcelId);
       }
     });
 
@@ -1087,21 +1091,110 @@
     });
   }
 
+  // ================== ОТПРАВКА НАРИСОВАННОГО УЧАСТКА НА СЕРВЕР ==================
+  // Формирует тело запроса вида:
+  // {
+  //   "geojson": { "type": "Feature", "geometry": { ... } },
+  //   "name": "Новое поле"
+  // }
+  // и отправляет POST /parcels.
+  // Ответ сервера: { parcel_id, geojson, area_ha, message }
+  // После ответа карта полностью перерисовывается по geojson с сервера,
+  // а карточка обновляется реальным parcel_id и area_ha.
+  async function saveDrawnParcel(layer, parcelName) {
+    if (!layer) return;
+
+    // Защита от повторной отправки одного и того же контура
+    // (например, если сервер уже вернул ID — не шлём снова без изменений)
+    if (parcelSyncedToServer && currentParcelId) {
+      return;
+    }
+
+    setStatus('Сохранение участка на сервере...', 'loading');
+    document.getElementById('loader').style.display = 'inline-block';
+
+    try {
+      // Конвертируем слой в GeoJSON (Feature)
+      const geojson = layer.toGeoJSON();
+
+      // Убедимся, что это Polygon (на всякий случай)
+      if (!geojson.geometry || geojson.geometry.type !== 'Polygon') {
+        throw new Error('Ожидался полигональный контур. Получен тип: ' +
+          (geojson.geometry ? geojson.geometry.type : 'undefined'));
+      }
+
+      const payload = {
+        geojson: {
+          type: "Feature",
+          geometry: geojson.geometry
+        },
+        name: parcelName || 'Новое поле'
+      };
+
+      console.log('POST /parcels payload:', payload);
+
+      const response = await fetch(URL_CREATE_PARCEL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      if (!response.ok) {
+        const errText = await response.text().catch(() => '');
+        throw new Error(`HTTP ${response.status}: ${errText || 'Ошибка сервера'}`);
+      }
+
+      const result = await response.json();
+      console.log('POST /parcels response:', result);
+
+      const newParcelId = result.parcel_id;
+      if (!newParcelId) {
+        throw new Error('Сервер не вернул parcel_id. Проверьте контракт POST /parcels.');
+      }
+
+      const serverGeoJSON = result.geojson;
+      if (!serverGeoJSON) {
+        throw new Error('Сервер не вернул geojson. Проверьте контракт POST /parcels.');
+      }
+
+      // Полностью перерисовываем карту по ответу сервера
+      drawnItems.clearLayers();
+      const geoLayer = L.geoJSON(serverGeoJSON, { style: parcelShapeOptions });
+      drawnItems.addLayer(geoLayer);
+
+      const polygonLayer = pickPolygonFromGeoLayer(geoLayer);
+      currentLayer = polygonLayer || geoLayer;
+
+      map.fitBounds(geoLayer.getBounds(), { padding: [60, 60] });
+
+      // Обновляем карточку реальными данными с сервера
+      updateParcelInfo(currentLayer, newParcelId, result.area_ha);
+
+      // Сбрасываем старые результаты анализа (они относятся к другому контуру)
+      resetAnalysisResult();
+
+      // Помечаем, что контур синхронизирован с сервером
+      parcelSyncedToServer = true;
+
+      setStatus(`Участок сохранён: ${newParcelId}`, 'ready');
+      if (result.message) {
+        setMenuHint(`${result.message} Выберите месяц и нажмите «Анализировать».`);
+      } else {
+        setMenuHint('Участок сохранён на сервере. Выберите месяц и нажмите «Анализировать».');
+      }
+
+    } catch (err) {
+      console.error(err);
+      showError(`Не удалось сохранить участок на сервере: ${err.message}`);
+      setStatus('Ошибка сохранения', 'error');
+    } finally {
+      document.getElementById('loader').style.display = 'none';
+    }
+  }
+
   // ================== ОТРИСОВКА РЕЗУЛЬТАТА АНАЛИЗА ==================
   function renderAnalysisResult(result) {
     if (!result) return;
-
-    // Ожидаемая структура ответа (согласовать с Арсением):
-    // {
-    //   status: "done",
-    //   parcel_id: "P-...",
-    //   month: "2025-06",
-    //   plot: { class_name, quality_text, ... },
-    //   ndvi: [ { date, ndvi_mean }, ... ],
-    //   economics: { base_rate, recommended_rate, period },
-    //   model: { coefficient, version }
-    // }
-    // Но поддерживаем и плоские варианты: result.class_name, result.base_rate и т.п.
 
     const plot = result.plot || {};
     const econ = result.economics || {};
@@ -1115,12 +1208,10 @@
     document.getElementById('quality').textContent = qualityText
       || (ndvi.length ? `Снимков: ${ndvi.length}` : 'Нет данных');
 
-    // Коэффициент модели (п.3 текущего ТЗ)
     const coeff = model.coefficient != null ? model.coefficient : result.model_coefficient;
     document.getElementById('model-coefficient').textContent =
       coeff != null ? Number(coeff).toFixed(4) : '—';
 
-    // Экономика
     const baseRate = econ.base_rate != null ? econ.base_rate : result.base_rate;
     const recRate  = econ.recommended_rate != null ? econ.recommended_rate : result.recommended_rate;
     const period   = econ.period || result.period;
@@ -1131,7 +1222,6 @@
       recRate != null ? Number(recRate).toLocaleString('ru-RU') + ' ₽/га' : '—';
     document.getElementById('period').textContent = period || '—';
 
-    // График NDVI
     const emptyEl = document.getElementById('ndvi-empty');
     const canvas = document.getElementById('ndvi-chart');
     const ctx = canvas.getContext('2d');
@@ -1177,16 +1267,15 @@
 
   // ================== ЗАПУСК АНАЛИЗА (async + long-polling) ==================
   async function runAnalysis() {
-    const parcelId = document.getElementById('parcel-id').textContent;
+    const parcelIdEl = document.getElementById('parcel-id');
+    const parcelId = (parcelIdEl.textContent || '').trim();
 
-    // Проверка на выбор участка
-    if (!parcelId || parcelId === '—' || !parcelId.startsWith('P-')) {
-      showError('Сначала создайте границы участка на карте (или используйте пример).');
+    if (!parcelId || parcelId === '—') {
+      showError('Сначала загрузите GPKG, создайте границы участка на карте (или используйте пример).');
       setStatus('Ошибка', 'error');
       return;
     }
 
-    // Проверка месяца анализа (формат YYYY-MM)
     const month = getAnalysisMonth();
     if (!month) {
       showError('Выберите месяц анализа.');
@@ -1201,7 +1290,6 @@
 
     hideError();
 
-    // Отменяем предыдущий long-polling, если он ещё висит
     if (pollAbort) {
       try { pollAbort.abort(); } catch (e) { /* ignore */ }
     }
@@ -1212,13 +1300,12 @@
     document.getElementById('loader').style.display = 'inline-block';
 
     try {
-      // 1. POST /analyze -> task_id, status: pending
       const analyzeResp = await fetch(URL_ANALYZE, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           parcel_id: parcelId,
-          month: month  // "YYYY-MM"
+          month: month
         }),
         signal
       });
@@ -1236,9 +1323,6 @@
 
       setStatus(`Анализ за ${month} выполняется (task ${taskId})...`, 'loading');
 
-      // 2. Long-polling GET /result/{task_id}
-      // Сервер сам держит соединение 20-25 секунд и отвечает pending,
-      // браузер сразу отправляет новый GET.
       const startedAt = Date.now();
       let result = null;
 
@@ -1265,20 +1349,15 @@
           throw new Error(data.error || data.message || 'Анализ завершился с ошибкой');
         }
 
-        // pending / running / queued — повторяем запрос
         setStatus(`Анализ за ${month} выполняется... (${st || 'pending'})`, 'loading');
-        // Небольшая пауза на случай, если сервер ответил мгновенно,
-        // чтобы не забивать сеть в tight-loop.
         await new Promise(r => setTimeout(r, 300));
       }
 
-      // 3. Отрисовка результата
       renderAnalysisResult(result);
       setStatus(`Готово (${result.month || month})`, 'ready');
 
     } catch (err) {
       if (err.name === 'AbortError') {
-        // Запрос отменён (например, при очистке границ) — не показываем ошибку
         return;
       }
       console.error(err);
@@ -1306,7 +1385,6 @@
     }
 
     hideError();
-    // Сбрасываем результаты предыдущего анализа перед новой загрузкой
     resetAnalysisResult();
 
     setStatus('Загрузка файла...', 'loading');
@@ -1314,13 +1392,11 @@
 
     try {
       const formData = new FormData();
-      // Поле должно совпадать с параметром в FastAPI: file: UploadFile = File(...)
       formData.append('file', file);
 
       const response = await fetch(URL_UPLOAD, {
         method: 'POST',
         body: formData
-        // НЕ устанавливаем Content-Type — браузер сам проставит multipart boundary
       });
 
       if (!response.ok) {
@@ -1331,41 +1407,40 @@
       const result = await response.json();
       console.log('Upload result:', result);
 
-      // Ожидаемый ответ (согласовать с Константином/Арсением):
-      // { "parcel_id": "P-...", "area_ha": 42.1, "geometry": {...}, "center": {...} }
-      // Поддерживаем также старое имя plot_id.
-      const newId = result.parcel_id || result.plot_id;
-      if (!newId) {
-        throw new Error('Сервер не вернул идентификатор участка (parcel_id). Проверьте контракт API.');
+      const newParcelId = result.parcel_id;
+      if (!newParcelId) {
+        throw new Error('Сервер не вернул parcel_id. Проверьте контракт POST /upload.');
       }
 
-      // Подставляем ID в карточку
-      document.getElementById('parcel-id').textContent = newId;
-      if (result.area_ha != null) {
+      const geojson = result.geojson || result.geometry;
+      if (!geojson) {
+        throw new Error('Сервер не вернул контур (geojson). Проверьте контракт POST /upload.');
+      }
+
+      drawnItems.clearLayers();
+      const geoLayer = L.geoJSON(geojson, { style: parcelShapeOptions });
+      drawnItems.addLayer(geoLayer);
+
+      const polygonLayer = pickPolygonFromGeoLayer(geoLayer);
+      currentLayer = polygonLayer || geoLayer;
+
+      map.fitBounds(geoLayer.getBounds(), { padding: [60, 60] });
+
+      updateParcelInfo(currentLayer, newParcelId, result.area_ha);
+
+      // Импортированный контур уже есть на сервере — повторно не отправляем
+      parcelSyncedToServer = true;
+
+      const props = (geojson.properties || {});
+      if (props.area_ha != null && result.area_ha == null) {
         document.getElementById('parcel-area').textContent =
-          `${Number(result.area_ha).toFixed(2)} га`;
-      }
-      if (result.center && result.center.lat != null && result.center.lng != null) {
-        document.getElementById('parcel-coords').textContent =
-          `${Number(result.center.lat).toFixed(5)}, ${Number(result.center.lng).toFixed(5)}`;
+          `${Number(props.area_ha).toFixed(2)} га (из свойств контура)`;
       }
 
-      // Отрисовываем контур на карте (если вернули geometry — GeoJSON)
-      if (result.geometry) {
-        drawnItems.clearLayers();
-        const geoLayer = L.geoJSON(result.geometry, { style: parcelShapeOptions });
-        drawnItems.addLayer(geoLayer);
-        currentLayer = geoLayer;
-        map.fitBounds(geoLayer.getBounds(), { padding: [60, 60] });
-      }
-
-      setStatus(`Файл загружен: ${newId}`, 'ready');
-      setMenuHint('Участок импортирован. Выберите месяц и запустите анализ.');
-
-      // Автоматически запускаем анализ только если месяц выбран
-      if (getAnalysisMonth()) {
-        await runAnalysis();
-      }
+      setStatus(`Файл загружен: ${newParcelId}`, 'ready');
+      setMenuHint(result.message
+        ? `${result.message} Выберите месяц и нажмите «Анализировать».`
+        : 'Участок импортирован. Выберите месяц и нажмите «Анализировать».');
 
     } catch (err) {
       console.error(err);
@@ -1373,11 +1448,27 @@
       setStatus('Ошибка загрузки', 'error');
     } finally {
       document.getElementById('loader').style.display = 'none';
-      document.getElementById('gpkg-input').value = ''; // сброс, чтобы можно было выбрать тот же файл
+      document.getElementById('gpkg-input').value = '';
     }
   }
 
-  // Инициализация поля месяца до инициализации карты
+  function pickPolygonFromGeoLayer(geoLayer) {
+    if (!geoLayer) return null;
+    if (geoLayer instanceof L.Polygon || geoLayer instanceof L.Rectangle) {
+      return geoLayer;
+    }
+    if (typeof geoLayer.eachLayer === 'function') {
+      let found = null;
+      geoLayer.eachLayer((l) => {
+        if (!found && (l instanceof L.Polygon || l instanceof L.Rectangle)) {
+          found = l;
+        }
+      });
+      return found;
+    }
+    return null;
+  }
+
   window.addEventListener('load', () => {
     initAnalysisMonth();
     initMap();
