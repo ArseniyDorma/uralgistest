@@ -541,11 +541,17 @@
   let editHandler = null;
 
   // Признак того, что текущий участок пришёл с сервера (есть настоящий parcel_id).
+<<<<<<< HEAD
   let currentParcelId = null;
 
   // Чтобы не отправлять POST /parcels повторно, если сервер уже вернул ID
   let parcelSyncedToServer = false;
 
+=======
+  // Для рисованных вручную контуров и примера — false, ID генерируется локально.
+  let currentParcelId = null;
+
+>>>>>>> bf2b9800875fb159972b33fb438e812d4bad395f
   let isBoxSelecting = false;
   let boxStartLatLng = null;
   let boxPreviewLayer = null;
@@ -612,13 +618,24 @@
     return true;
   }
 
+<<<<<<< HEAD
   function initAnalysisMonth() {
     const el = document.getElementById('analysis-month');
     if (!el) return;
+=======
+  // Настройка поля месяца.
+  // ВАЖНО: значение по умолчанию НЕ подставляем — пользователь должен
+  // сам осознанно выбрать месяц и нажать «Анализировать».
+  function initAnalysisMonth() {
+    const el = document.getElementById('analysis-month');
+    if (!el) return;
+    // Ограничиваем выбор будущими месяцами
+>>>>>>> bf2b9800875fb159972b33fb438e812d4bad395f
     const now = new Date();
     const yyyy = now.getFullYear();
     const mm = String(now.getMonth() + 1).padStart(2, '0');
     el.max = `${yyyy}-${mm}`;
+    // el.value оставляем пустым
   }
 
   // ================== ГЕОМЕТРИЧЕСКИЕ РАСЧЁТЫ ==================
@@ -667,7 +684,14 @@
   }
 
   // ================== КАРТОЧКА УЧАСТКА ==================
+<<<<<<< HEAD
   function updateParcelInfo(layer, serverParcelId, serverAreaHa) {
+=======
+  // Принимает слой и (опционально) серверный parcel_id.
+  // Если parcel_id передан — значит участок пришёл с сервера (например, через /upload).
+  // Если нет — генерируем локальный ID по центру (для рисования/примера).
+  function updateParcelInfo(layer, serverParcelId) {
+>>>>>>> bf2b9800875fb159972b33fb438e812d4bad395f
     if (!layer) return;
     const latlngs = getLayerLatLngs(layer);
     if (!latlngs || latlngs.length === 0) return;
@@ -697,7 +721,10 @@
 
   function resetParcelInfo() {
     currentParcelId = null;
+<<<<<<< HEAD
     parcelSyncedToServer = false;
+=======
+>>>>>>> bf2b9800875fb159972b33fb438e812d4bad395f
     document.getElementById('parcel-id').textContent = '—';
     document.getElementById('parcel-coords').textContent = '—';
     document.getElementById('parcel-area').textContent = '—';
@@ -845,9 +872,14 @@
     document.getElementById('btn-edit-desc').textContent = 'Тяните за вершины';
 
     if (currentLayer) {
+<<<<<<< HEAD
       // После редактирования отправляем участок на сервер заново,
       // потому что геометрия изменилась
       await saveDrawnParcel(currentLayer, 'Поле (изменено)');
+=======
+      // Если участок был с сервера — сохраняем его parcel_id при редактировании
+      updateParcelInfo(currentLayer, currentParcelId);
+>>>>>>> bf2b9800875fb159972b33fb438e812d4bad395f
     }
     setStatus('Границы сохранены', 'ready');
     selectTool('view');
@@ -900,11 +932,17 @@
     currentLayer = polygon;
 
     map.fitBounds(polygon.getBounds(), { padding: [60, 60] });
+<<<<<<< HEAD
     
     // Демо-данные тоже отправляем на сервер (чтобы был честный API-ответ)
     saveDrawnParcel(polygon, 'Пример участка');
 
     setStatus('Загружен пример участка', 'ready');
+=======
+    // Для примера серверного parcel_id нет — updateParcelInfo сгенерирует локальный
+    updateParcelInfo(polygon);
+    setStatus('Загружен пример участка (Тестовый участок)', 'ready');
+>>>>>>> bf2b9800875fb159972b33fb438e812d4bad395f
     setMenuHint('Пример участка загружен! Выберите месяц и нажмите «Анализировать».');
     selectTool('view');
   }
@@ -1030,7 +1068,11 @@
 
       setStatus('Границы участка созданы', 'ready');
       selectTool('view');
+<<<<<<< HEAD
       setMenuHint('Участок выделен и сохранён! Выберите месяц и нажмите «Анализировать».');
+=======
+      setMenuHint('Участок выделен! Выберите месяц и нажмите «Анализировать».');
+>>>>>>> bf2b9800875fb159972b33fb438e812d4bad395f
     };
 
     map.on('mouseup', finishBoxSelect);
@@ -1053,7 +1095,11 @@
 
           setStatus('Границы участка созданы', 'ready');
           selectTool('view');
+<<<<<<< HEAD
           setMenuHint('Участок выделен и сохранён! Выберите месяц и нажмите «Анализировать».');
+=======
+          setMenuHint('Участок выделен! Выберите месяц и нажмите «Анализировать».');
+>>>>>>> bf2b9800875fb159972b33fb438e812d4bad395f
         }
       }
     });
@@ -1074,7 +1120,11 @@
       await saveDrawnParcel(layer, 'Новое поле');
 
       setStatus('Границы участка созданы', 'ready');
+<<<<<<< HEAD
       setMenuHint('Контур зафиксирован и сохранён! Выберите месяц и нажмите «Анализировать».');
+=======
+      setMenuHint('Контур зафиксирован! Выберите месяц и нажмите «Анализировать».');
+>>>>>>> bf2b9800875fb159972b33fb438e812d4bad395f
       selectTool('rect');
     });
 
@@ -1267,6 +1317,11 @@
 
   // ================== ЗАПУСК АНАЛИЗА (async + long-polling) ==================
   async function runAnalysis() {
+<<<<<<< HEAD
+=======
+    // ID участка может быть коротким hex-UUID от сервера (например "a1b2c3d4"),
+    // а может быть локальным "P-lat_lng". Проверяем просто «не пусто».
+>>>>>>> bf2b9800875fb159972b33fb438e812d4bad395f
     const parcelIdEl = document.getElementById('parcel-id');
     const parcelId = (parcelIdEl.textContent || '').trim();
 
@@ -1404,6 +1459,13 @@
         throw new Error(`HTTP ${response.status}: ${errText || 'Ошибка сервера'}`);
       }
 
+      // Реальный контракт POST /upload (UploadResponse):
+      // {
+      //   "parcel_id": "a1b2c3d4",
+      //   "filename": "contour.gpkg",
+      //   "geojson": { "type": "Feature", "properties": {...}, "geometry": {...} },
+      //   "message": "..."
+      // }
       const result = await response.json();
       console.log('Upload result:', result);
 
@@ -1412,15 +1474,24 @@
         throw new Error('Сервер не вернул parcel_id. Проверьте контракт POST /upload.');
       }
 
+<<<<<<< HEAD
+=======
+      // Поддерживаем и старое имя поля geometry на случай смены контракта
+>>>>>>> bf2b9800875fb159972b33fb438e812d4bad395f
       const geojson = result.geojson || result.geometry;
       if (!geojson) {
         throw new Error('Сервер не вернул контур (geojson). Проверьте контракт POST /upload.');
       }
 
+<<<<<<< HEAD
+=======
+      // Отрисовываем контур на карте
+>>>>>>> bf2b9800875fb159972b33fb438e812d4bad395f
       drawnItems.clearLayers();
       const geoLayer = L.geoJSON(geojson, { style: parcelShapeOptions });
       drawnItems.addLayer(geoLayer);
 
+<<<<<<< HEAD
       const polygonLayer = pickPolygonFromGeoLayer(geoLayer);
       currentLayer = polygonLayer || geoLayer;
 
@@ -1433,11 +1504,34 @@
 
       const props = (geojson.properties || {});
       if (props.area_ha != null && result.area_ha == null) {
+=======
+      // Важно: currentLayer должен быть полигоном/прямоугольником,
+      // чтобы getLayerLatLngs() и getBounds() работали корректно.
+      // L.geoJSON возвращает FeatureGroup — берём первый дочерний слой-полигон.
+      const polygonLayer = pickPolygonFromGeoLayer(geoLayer);
+      currentLayer = polygonLayer || geoLayer;
+
+      // Центр/площадь/периметр считаем на клиенте из геометрии
+      map.fitBounds(geoLayer.getBounds(), { padding: [60, 60] });
+
+      // Передаём серверный parcel_id, чтобы он отобразился в карточке
+      updateParcelInfo(currentLayer, newParcelId);
+
+      // В карточке также полезно показать исходное имя файла и area_ha из properties (если есть)
+      const props = (geojson.properties || {});
+      if (props.area_ha != null) {
+        // Перезаписываем площадь значением из свойств контура (серверная оценка)
+>>>>>>> bf2b9800875fb159972b33fb438e812d4bad395f
         document.getElementById('parcel-area').textContent =
           `${Number(props.area_ha).toFixed(2)} га (из свойств контура)`;
       }
 
       setStatus(`Файл загружен: ${newParcelId}`, 'ready');
+<<<<<<< HEAD
+=======
+      // ВАЖНО: анализ здесь НЕ запускаем — пользователь сам выберет месяц
+      // и нажмёт «Анализировать». Подсказка приглашает к этому.
+>>>>>>> bf2b9800875fb159972b33fb438e812d4bad395f
       setMenuHint(result.message
         ? `${result.message} Выберите месяц и нажмите «Анализировать».`
         : 'Участок импортирован. Выберите месяц и нажмите «Анализировать».');
@@ -1452,6 +1546,12 @@
     }
   }
 
+<<<<<<< HEAD
+=======
+  // Достаёт первый полигон из L.GeoJSON FeatureGroup.
+  // Нужно, потому что updateParcelInfo ожидает L.Polygon/L.Rectangle,
+  // а L.geoJSON возвращает FeatureGroup, у которого getLatLngs() нет.
+>>>>>>> bf2b9800875fb159972b33fb438e812d4bad395f
   function pickPolygonFromGeoLayer(geoLayer) {
     if (!geoLayer) return null;
     if (geoLayer instanceof L.Polygon || geoLayer instanceof L.Rectangle) {
@@ -1469,6 +1569,10 @@
     return null;
   }
 
+<<<<<<< HEAD
+=======
+  // Инициализация поля месяца до инициализации карты
+>>>>>>> bf2b9800875fb159972b33fb438e812d4bad395f
   window.addEventListener('load', () => {
     initAnalysisMonth();
     initMap();
